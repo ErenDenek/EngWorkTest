@@ -110,19 +110,52 @@ class DatabaseManager {
         });
     }
 
-    // İlk Açılış & Eksik Başlangıç Kelimelerini Tohumlama (Yeni A1/A2 kelimeleri mevcut veritabanına da güvenle ekler)
+    // İlk Açılış & Eksik Başlangıç Kelimelerini Tohumlama (Tüm 3900+ kelimeyi mevcut veritabanına da güvenle ekler/zenginleştirir)
     async seedInitialData() {
         const existingVocab = await this.getAll("vocabulary");
         const existingIds = new Set(existingVocab.map(v => v.id));
-        const existingTerms = new Set(existingVocab.map(v => (v.term || "").toLowerCase()));
+        const existingByTerm = new Map();
+        for (const v of existingVocab) {
+            const tKey = (v.term || "").toLowerCase();
+            if (tKey && !existingByTerm.has(tKey)) {
+                existingByTerm.set(tKey, v);
+            }
+        }
 
         if (typeof DEFAULT_WORDS !== "undefined") {
-            const missingDefaults = DEFAULT_WORDS.filter(item =>
-                !existingIds.has(item.id) && !existingTerms.has(item.term.toLowerCase())
-            );
-            if (missingDefaults.length > 0) {
+            const missingDefaults = [];
+            const enrichTargets = [];
+
+            for (const item of DEFAULT_WORDS) {
+                const tKey = (item.term || "").toLowerCase();
+                if (!existingIds.has(item.id) && !existingByTerm.has(tKey)) {
+                    missingDefaults.push(item);
+                } else {
+                    const existing = existingByTerm.get(tKey) || existingVocab.find(v => v.id === item.id);
+                    if (existing && (existing.meanings || []).length < (item.meanings || []).length) {
+                        const prevByTr = new Map(
+                            (existing.meanings || []).map(m => [(m.tr || "").toLowerCase(), m])
+                        );
+                        const mergedMeanings = item.meanings.map(m => {
+                            const prevM = prevByTr.get((m.tr || "").toLowerCase());
+                            return prevM
+                                ? { ...m, askedCount: prevM.askedCount || 0, correctCount: prevM.correctCount || 0, wrongCount: prevM.wrongCount || 0 }
+                                : { ...m };
+                        });
+                        enrichTargets.push({
+                            ...existing,
+                            meanings: mergedMeanings,
+                            updatedAt: new Date().toISOString()
+                        });
+                    }
+                }
+            }
+
+            if (missingDefaults.length > 0 || enrichTargets.length > 0) {
                 const tx = this.db.transaction("vocabulary", "readwrite");
                 const store = tx.objectStore("vocabulary");
+                const nowIso = new Date().toISOString();
+
                 for (const item of missingDefaults) {
                     store.put({
                         ...item,
@@ -133,10 +166,18 @@ class DatabaseManager {
                         correctCount: 0,
                         mistakeCount: 0,
                         customAdded: false,
-                        updatedAt: new Date().toISOString()
+                        updatedAt: nowIso
                     });
                 }
-                await new Promise((res) => { tx.oncomplete = res; });
+
+                for (const updated of enrichTargets) {
+                    store.put(updated);
+                }
+
+                await new Promise((res, rej) => {
+                    tx.oncomplete = res;
+                    tx.onerror = () => rej(tx.error);
+                });
             }
         }
 

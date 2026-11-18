@@ -1,4 +1,4 @@
-const CACHE_NAME = 'linguaquest-pwa-v1';
+const CACHE_NAME = 'linguaquest-pwa-v2';
 
 const STATIC_ASSETS = [
   './',
