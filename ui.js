@@ -8,6 +8,7 @@ class UIController {
         this.arenaSentences = [];
         this.activeVocabSubtab = "word"; // 'word' | 'phrasal' | 'connector' | 'mistakes' | 'all'
         this.vocabRenderLimit = 100;
+        this._lastCloudPullAt = 0;
     }
 
     async init() {
@@ -19,9 +20,44 @@ class UIController {
         document.documentElement.setAttribute("data-theme", theme);
         document.getElementById("btn-theme-toggle").textContent = theme === "dark" ? "🌙" : "☀️";
 
+        // Bulut durum dinleyicisi
+        window.dbManager.onCloudStatusChange = (state, detail) => {
+            this.updateCloudStatusBadge(state, detail);
+        };
+
         this.bindGlobalEvents();
         await this.refreshAllViews();
-        await this.checkFirstRunApiPrompt();
+
+        // Otomatik ilerleme çekme: uygulama açıldığında ve sekme/uygulama tekrar öne geldiğinde
+        const autoPullIfConfigured = async () => {
+            try {
+                const cfg = await window.dbManager.getCloudConfig();
+                if (!cfg.githubToken || !cfg.username) return;
+                this._lastCloudPullAt = Date.now();
+                const pullRes = await window.dbManager.pullFromGitHubGist({ silent: true, merge: true });
+                if (pullRes?.applied && (pullRes.restoredWords > 0 || pullRes.restoredDays > 0)) {
+                    const updatedOverview = await window.gameEngine.init();
+                    this.selectedDayNumber = updatedOverview.currentDayNumber;
+                    await this.refreshAllViews();
+                    this.showToast(`☁️ "${cfg.username}" profili buluttan güncellendi!`);
+                }
+            } catch (_) {}
+        };
+
+        await autoPullIfConfigured();
+
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "visible" && Date.now() - this._lastCloudPullAt > 20000) {
+                autoPullIfConfigured();
+            }
+        });
+
+        const cloudCfg = await window.dbManager.getCloudConfig();
+        if (cloudCfg.githubToken && !cloudCfg.username) {
+            await this.openUsernamePromptModal();
+        } else {
+            await this.checkFirstRunApiPrompt();
+        }
     }
 
     bindGlobalEvents() {
@@ -318,6 +354,40 @@ class UIController {
         if (btnResetKeepWords) {
             btnResetKeepWords.addEventListener("click", () => this.handleResetProgressKeepWords());
         }
+
+        // Üstteki Bulut / Kullanıcı Rozeti tıklanınca Hızlı Profil Seçim Modalını aç
+        document.getElementById("hud-cloud-mode")?.addEventListener("click", () => this.openUsernamePromptModal());
+
+        // Çoklu Kullanıcı Modal Eventleri
+        document.getElementById("btn-close-user-modal")?.addEventListener("click", async () => {
+            document.getElementById("username-prompt-modal").style.display = "none";
+            await this.checkFirstRunApiPrompt();
+        });
+        document.getElementById("btn-modal-switch-user")?.addEventListener("click", async () => {
+            const val = document.getElementById("modal-username-input")?.value || "";
+            const ok = await this.handleSwitchUserProfile(val);
+            if (ok) {
+                document.getElementById("username-prompt-modal").style.display = "none";
+                await this.checkFirstRunApiPrompt();
+            }
+        });
+
+        // Ayarlar -> Çoklu Kullanıcı & GitHub Gist Eventleri
+        document.getElementById("btn-switch-user")?.addEventListener("click", () => {
+            const val = document.getElementById("setting-username")?.value || "";
+            this.handleSwitchUserProfile(val, "cloud-sync-feedback");
+        });
+        document.getElementById("btn-refresh-cloud-users")?.addEventListener("click", () => {
+            this.renderCloudUserPills("cloud-users-pills", "cloud-sync-feedback");
+        });
+        document.getElementById("btn-toggle-gh-token")?.addEventListener("click", () => {
+            const inp = document.getElementById("setting-github-token");
+            if (inp) inp.type = inp.type === "password" ? "text" : "password";
+        });
+        document.getElementById("btn-cloud-sync-now")?.addEventListener("click", () => this.handleCloudSyncAction("both"));
+        document.getElementById("btn-cloud-pull")?.addEventListener("click", () => this.handleCloudSyncAction("pull"));
+        document.getElementById("btn-cloud-push")?.addEventListener("click", () => this.handleCloudSyncAction("push"));
+        document.getElementById("btn-generate-embedded-token")?.addEventListener("click", () => this.handleGenerateEmbeddedToken());
     }
 
     async refreshAllViews() {
@@ -359,6 +429,41 @@ class UIController {
         } else {
             dot.className = "status-dot demo";
             txt.textContent = "Demo Modu";
+        }
+
+        await this.updateCloudStatusBadge();
+    }
+
+    async updateCloudStatusBadge(state = null, detail = null) {
+        const pill = document.getElementById("hud-cloud-mode");
+        const dot = document.getElementById("hud-cloud-dot");
+        const txt = document.getElementById("hud-cloud-text");
+        if (!pill || !dot || !txt) return;
+
+        const cfg = await window.dbManager.getCloudConfig();
+        const userLabel = cfg.username ? `👤 ${cfg.username}` : "👤 Seçilmedi";
+
+        if (state === "syncing") {
+            dot.className = "status-dot demo";
+            txt.textContent = `${userLabel} • ⏳`;
+            return;
+        }
+        if (state === "error") {
+            dot.className = "status-dot demo";
+            txt.textContent = `${userLabel} • ⚠️`;
+            if (detail) pill.title = detail;
+            return;
+        }
+        if (cfg.githubToken && cfg.username) {
+            dot.className = "status-dot live";
+            txt.textContent = `${userLabel} • ☁️ Aktif`;
+            pill.title = cfg.lastSyncAt
+                ? `Kullanıcı: ${cfg.username} | Son Eşitleme: ${new Date(cfg.lastSyncAt).toLocaleString("tr-TR")}`
+                : `Kullanıcı: ${cfg.username} | GitHub Gist Aktif`;
+        } else {
+            dot.className = "status-dot demo";
+            txt.textContent = cfg.username ? `${userLabel} • Bulut Yok` : "👤 Profil Seç";
+            pill.title = "Kullanıcı profili seçmek veya değiştirmek için tıklayın";
         }
     }
 
@@ -2181,6 +2286,7 @@ class UIController {
     async loadSettingsForm() {
         const aiConfig = await window.geminiService.getConfig();
         const profile = await window.dbManager.get("settings", "profile");
+        const cloudCfg = await window.dbManager.getCloudConfig();
 
         document.getElementById("setting-api-key").value = aiConfig.apiKey || "";
         this.populateModelSelectElement("setting-ai-model", aiConfig.availableModels || [], aiConfig.model || "gemini-2.5-flash");
@@ -2191,6 +2297,25 @@ class UIController {
         if (cefrSelect && profile?.cefrLevel) {
             cefrSelect.value = profile.cefrLevel;
         }
+
+        const userInp = document.getElementById("setting-username");
+        const ghTokenInp = document.getElementById("setting-github-token");
+        const ghGistInp = document.getElementById("setting-gist-id");
+        const hintEl = document.getElementById("shared-token-hint");
+
+        if (userInp) userInp.value = cloudCfg.username || "";
+        if (ghGistInp) ghGistInp.value = cloudCfg.gistId || "";
+        if (ghTokenInp) {
+            ghTokenInp.value = cloudCfg.rawCustomToken || "";
+            if (cloudCfg.isSharedEmbedded) {
+                ghTokenInp.placeholder = "🔐 Ortak Tek Hesap Anahtarı Kodda Gömülü (Hazır)";
+            }
+        }
+        if (hintEl && cloudCfg.isSharedEmbedded) {
+            hintEl.innerHTML = `<span style="color:var(--accent-primary);font-weight:700;">✅ Tek GitHub hesabı anahtarı kodda gömülü! Başka hiçbir kullanıcının token girmesine gerek yok.</span>`;
+        }
+
+        this.renderCloudUserPills("cloud-users-pills").catch(() => {});
     }
 
     async saveSettingsForm() {
@@ -2208,6 +2333,17 @@ class UIController {
             preferredScenario: this.activeScenario
         });
 
+        const ghTokenVal = document.getElementById("setting-github-token")?.value.trim();
+        const ghGistVal = document.getElementById("setting-gist-id")?.value.trim();
+        const userVal = document.getElementById("setting-username")?.value.trim();
+        if (ghTokenVal !== undefined || ghGistVal !== undefined || userVal !== undefined) {
+            await window.dbManager.saveCloudConfig({
+                ...(ghTokenVal ? { githubToken: ghTokenVal } : {}),
+                ...(ghGistVal !== undefined ? { gistId: ghGistVal } : {}),
+                ...(userVal ? { username: userVal } : {})
+            });
+        }
+
         const profile = await window.dbManager.get("settings", "profile");
         if (profile) {
             profile.avatar = avatar;
@@ -2216,9 +2352,243 @@ class UIController {
         }
 
         await window.gameEngine.updateTargetCefrLevel(cefrLevel);
+        window.dbManager.scheduleCloudSync();
         await this.updateHUD();
         await this.renderMapAndQuest();
         this.showToast(`💾 Ayarlar, Gemini modeli ve ${cefrLevel} seviyeniz kaydedildi!`);
+    }
+
+    async openUsernamePromptModal() {
+        const modal = document.getElementById("username-prompt-modal");
+        if (!modal) return;
+        const cfg = await window.dbManager.getCloudConfig();
+        const inp = document.getElementById("modal-username-input");
+        if (inp) inp.value = cfg.username || "";
+        modal.style.display = "flex";
+        this.renderCloudUserPills("modal-cloud-users-pills", null, true).catch(() => {});
+    }
+
+    async renderCloudUserPills(containerId, feedbackId = null, closeModalOnSelect = false) {
+        const container = document.getElementById(containerId);
+        if (!container) return;
+
+        const cfg = await window.dbManager.getCloudConfig();
+        if (!cfg.githubToken) {
+            container.innerHTML = `<small class="text-muted">Bulut kullanıcılarını görmek için yönetici GitHub Token veya kodda gömülü ortak anahtar gereklidir.</small>`;
+            return;
+        }
+
+        container.innerHTML = `<small class="text-muted">⏳ Buluttaki kullanıcı profilleri taranıyor...</small>`;
+        try {
+            const users = await window.dbManager.listCloudUsers();
+            if (users.length === 0) {
+                container.innerHTML = `<small class="text-muted">Henüz bulutta kayıtlı profil yok. Yukarıya adınızı yazıp ilk profili oluşturabilirsiniz.</small>`;
+                return;
+            }
+            container.innerHTML = users.map(u => `
+                <button type="button" class="scenario-pill ${u === cfg.username ? "active" : ""}" data-cloud-user="${u}">
+                    👤 ${u}${u === cfg.username ? " (Aktif)" : ""}
+                </button>
+            `).join("");
+
+            container.querySelectorAll("[data-cloud-user]").forEach(btn => {
+                btn.addEventListener("click", async () => {
+                    const chosen = btn.getAttribute("data-cloud-user");
+                    const ok = await this.handleSwitchUserProfile(chosen, feedbackId);
+                    if (ok && closeModalOnSelect) {
+                        document.getElementById("username-prompt-modal").style.display = "none";
+                        await this.checkFirstRunApiPrompt();
+                    }
+                });
+            });
+        } catch (err) {
+            container.innerHTML = `<small style="color:var(--accent-danger);">❌ Bulut profilleri alınamadı: ${err.message}</small>`;
+        }
+    }
+
+    async handleSwitchUserProfile(rawUsername, feedbackId = null) {
+        const norm = window.dbManager.normalizeUsername(rawUsername);
+        if (!norm) {
+            this.showToast("⚠️ Lütfen geçerli bir kullanıcı adı girin (ör. eren, ahmet).");
+            return false;
+        }
+
+        const banner = feedbackId ? document.getElementById(feedbackId) : null;
+        if (banner) {
+            banner.style.display = "block";
+            banner.style.background = "var(--bg-elevated)";
+            banner.textContent = `⏳ "${norm}" profili hazırlanıyor...`;
+        }
+
+        try {
+            const ghTokenInp = document.getElementById("setting-github-token");
+            const ghGistInp = document.getElementById("setting-gist-id");
+            if (ghTokenInp?.value.trim() || ghGistInp?.value.trim()) {
+                await window.dbManager.saveCloudConfig({
+                    ...(ghTokenInp?.value.trim() ? { githubToken: ghTokenInp.value.trim() } : {}),
+                    ...(ghGistInp?.value.trim() ? { gistId: ghGistInp.value.trim() } : {})
+                });
+            }
+
+            const res = await window.dbManager.switchUserProfile(norm);
+            const overview = await window.gameEngine.init();
+            this.selectedDayNumber = overview.currentDayNumber;
+            await this.refreshAllViews();
+            await this.loadSettingsForm();
+
+            const msg = res.loadedFromCloud
+                ? `✅ "${res.username}" profili buluttan yüklendi!`
+                : `✅ "${res.username}" için yeni profil oluşturuldu!`;
+            if (banner) {
+                banner.style.background = "rgba(16, 185, 129, 0.2)";
+                banner.textContent = msg;
+            }
+            this.showToast(msg);
+            return true;
+        } catch (err) {
+            if (banner) {
+                banner.style.display = "block";
+                banner.style.background = "rgba(239, 68, 68, 0.2)";
+                banner.textContent = `❌ Profil geçiş hatası: ${err.message}`;
+            }
+            this.showToast("❌ " + err.message);
+            return false;
+        }
+    }
+
+    async handleGenerateEmbeddedToken() {
+        const tokenInp = document.getElementById("setting-github-token");
+        const gistInp = document.getElementById("setting-gist-id");
+        const outBox = document.getElementById("embedded-token-output");
+
+        const cfg = await window.dbManager.getCloudConfig();
+        const rawToken = tokenInp?.value.trim() || cfg.githubToken;
+        if (!rawToken) {
+            this.showToast("⚠️ Önce yukarıdaki kutuya GitHub Token girin.");
+            return;
+        }
+
+        if (outBox) {
+            outBox.style.display = "block";
+            outBox.style.background = "var(--bg-elevated)";
+            outBox.textContent = "⏳ Ortak Gist kontrol ediliyor ve şifreli gömülü kod üretiliyor...";
+        }
+
+        try {
+            let gistId = gistInp?.value.trim() || cfg.gistId;
+            if (!gistId) {
+                const gist = await window.dbManager.findOrCreateGistId(rawToken, "");
+                gistId = gist.id;
+                if (gistInp) gistInp.value = gistId;
+                await window.dbManager.saveCloudConfig({ githubToken: rawToken, gistId });
+            }
+
+            const encoded = window.dbManager.encodeTokenForRepo(rawToken);
+            const snippet = `const SHARED_GIST_CONFIG = {\n    encodedToken: "${encoded}",\n    gistId: "${gistId}"\n};`;
+
+            if (outBox) {
+                outBox.style.background = "rgba(16, 185, 129, 0.16)";
+                outBox.innerHTML = `
+                    <div><strong>✅ Şifreli Tek-Hesap Kodu Hazır!</strong> (GitHub düz token olarak iptal etmez)</div>
+                    <small class="text-muted">Aşağıdaki kodu <code>db.js</code> başındaki <code>SHARED_GIST_CONFIG</code> yerine yapıştırıp GitHub'a yüklerseniz diğer kullanıcılar hiç token girmeden sadece isim seçip devam eder:</small>
+                    <pre style="margin-top:0.5rem;padding:0.65rem;background:var(--bg-secondary);border-radius:8px;overflow-x:auto;font-size:0.78rem;user-select:all;">${snippet}</pre>
+                    <button type="button" class="btn btn-primary btn-sm" id="btn-copy-embedded-snippet" style="margin-top:0.5rem;">📋 Kodu Kopyala</button>
+                `;
+                document.getElementById("btn-copy-embedded-snippet")?.addEventListener("click", async () => {
+                    try {
+                        await navigator.clipboard.writeText(snippet);
+                        this.showToast("📋 Kod panoya kopyalandı! db.js içine yapıştırabilirsiniz.");
+                    } catch (_) {
+                        this.showToast("ℹ️ Kodu yukarıdaki kutudan seçip kopyalayabilirsiniz.");
+                    }
+                });
+            }
+        } catch (err) {
+            if (outBox) {
+                outBox.style.background = "rgba(239, 68, 68, 0.2)";
+                outBox.textContent = `❌ Kod üretilemedi: ${err.message}`;
+            }
+            this.showToast("❌ " + err.message);
+        }
+    }
+
+    async handleCloudSyncAction(mode = "both") {
+        const userInp = document.getElementById("setting-username");
+        const tokenInp = document.getElementById("setting-github-token");
+        const gistInp = document.getElementById("setting-gist-id");
+        const banner = document.getElementById("cloud-sync-feedback");
+
+        const existingCfg = await window.dbManager.getCloudConfig();
+        const username = userInp?.value.trim() || existingCfg.username;
+        const customToken = tokenInp?.value.trim() || "";
+        const gistId = gistInp?.value.trim() || existingCfg.gistId;
+
+        if (!username) {
+            if (banner) {
+                banner.style.display = "block";
+                banner.style.background = "rgba(239, 68, 68, 0.2)";
+                banner.textContent = "❌ Lütfen önce yukarıdan bir kullanıcı adı girin (ör. eren).";
+            }
+            this.showToast("⚠️ Önce kullanıcı adı girin.");
+            return;
+        }
+
+        if (!existingCfg.githubToken && !customToken) {
+            if (banner) {
+                banner.style.display = "block";
+                banner.style.background = "rgba(239, 68, 68, 0.2)";
+                banner.textContent = "❌ GitHub Token bulunamadı (Ortak kod gömülü değilse yönetici token girin).";
+            }
+            this.showToast("⚠️ GitHub Token girin.");
+            return;
+        }
+
+        await window.dbManager.saveCloudConfig({
+            ...(customToken ? { githubToken: customToken } : {}),
+            gistId,
+            username,
+            autoSync: true
+        });
+
+        if (banner) {
+            banner.style.display = "block";
+            banner.style.background = "var(--bg-elevated)";
+            banner.textContent = `⏳ "${username}" profili GitHub Gist ile eşitleniyor...`;
+        }
+
+        try {
+            let pushInfo = null;
+            if (mode === "pull" || mode === "both") {
+                await window.dbManager.pullFromGitHubGist({ silent: false, merge: true });
+            }
+            if (mode === "push" || mode === "both") {
+                pushInfo = await window.dbManager.syncToGitHubGist({ silent: false });
+            }
+
+            const updatedCfg = await window.dbManager.getCloudConfig();
+            if (gistInp && updatedCfg.gistId) {
+                gistInp.value = updatedCfg.gistId;
+            }
+
+            const overview = await window.gameEngine.init();
+            this.selectedDayNumber = overview.currentDayNumber;
+            await this.refreshAllViews();
+            await this.loadSettingsForm();
+
+            if (banner) {
+                banner.style.background = "rgba(16, 185, 129, 0.2)";
+                const kb = pushInfo?.bytes ? ` (${(pushInfo.bytes / 1024).toFixed(1)} KB)` : "";
+                banner.textContent = `✅ "${updatedCfg.username}" Profili Eşitlendi! Dosya: linguaquest_user_${updatedCfg.username}.json${kb} • Gist ID: ${updatedCfg.gistId}`;
+            }
+            this.showToast(`☁️ "${updatedCfg.username}" profili eşitlendi!`);
+        } catch (err) {
+            if (banner) {
+                banner.style.display = "block";
+                banner.style.background = "rgba(239, 68, 68, 0.2)";
+                banner.textContent = `❌ Senkronizasyon Hatası: ${err.message}`;
+            }
+            this.showToast("❌ Bulut hatası: " + err.message);
+        }
     }
 
     async testGeminiConnection() {

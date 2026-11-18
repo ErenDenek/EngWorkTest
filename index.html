@@ -87,6 +87,11 @@
                 <span class="status-dot demo"></span>
                 <span id="hud-ai-text">Demo Modu</span>
             </div>
+            <div class="hud-pill cloud-status-pill" id="hud-cloud-mode" style="cursor:pointer;"
+                title="Kullanıcı Profili & GitHub Gist Bulut Senkronizasyonu (Tıklayın)">
+                <span class="status-dot demo" id="hud-cloud-dot"></span>
+                <span id="hud-cloud-text">👤 Seçilmedi • ☁️</span>
+            </div>
             <button class="icon-btn" id="btn-quick-add-word"
                 title="Yeni Kelime, Phrasal Verb veya Bağlaç Kalıbı Ekle (+ AI Doldur)">
                 ➕ Kelime / Kalıp Ekle
@@ -442,6 +447,65 @@
                     </div>
                 </div>
 
+                <!-- Çoklu Kullanıcı (Multi-User) & Tek Hesap GitHub Gist Senkronizasyonu -->
+                <div class="glass-panel mobile-guide-panel" id="cloud-sync-panel">
+                    <h3>☁️ Çoklu Kullanıcı & GitHub Gist Bulut Senkronizasyonu</h3>
+                    <p class="text-muted">
+                        Tüm kullanıcıların verileri tek bir gizli GitHub Gist içinde ayrı dosyalar
+                        (<code>linguaquest_user_kullanici.json</code>) olarak tutulur; kimsenin ilerlemesi karışmaz.
+                        Ortak gömülü anahtar tanımlandıysa diğer kullanıcıların token girmesine gerek kalmaz — yalnızca
+                        kullanıcı adlarını yazmaları yeterlidir.
+                    </p>
+
+                    <div class="backup-card" style="margin-top:0.85rem;width:100%;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;width:100%;flex-wrap:wrap;gap:0.6rem;">
+                            <h4>👤 Aktif Kullanıcı (Profil) Seçimi</h4>
+                            <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-cloud-users">
+                                🔄 Buluttaki Kullanıcıları Yenile
+                            </button>
+                        </div>
+                        <div class="input-with-btn" style="width:100%;margin-top:0.45rem;">
+                            <input type="text" id="setting-username" class="form-input"
+                                placeholder="Kullanıcı adınızı yazın (ör. eren, ahmet, zeynep)..." />
+                            <button type="button" class="btn btn-primary" id="btn-switch-user">
+                                👤 Bu Kullanıcıya Geç / Oluştur
+                            </button>
+                        </div>
+                        <div id="cloud-users-pills" class="scenario-pills" style="margin-top:0.65rem;"></div>
+                        <small class="text-muted">Profil değiştirdiğinizde yerel ilerleme mevcut kullanıcıya kaydedilir ve seçilen kullanıcının buluttaki ilerlemesi yüklenir.</small>
+                    </div>
+
+                    <div class="form-row-2" style="margin-top:1rem;">
+                        <div class="form-group" style="margin-top:0;">
+                            <label for="setting-github-token">GitHub Personal Access Token (<code>gist</code> yetkili — Yönetici)</label>
+                            <div class="input-with-btn">
+                                <input type="password" id="setting-github-token" class="form-input"
+                                    placeholder="Ortak kod gömülüyse diğer kişilerin girmesi gerekmez" />
+                                <button class="btn btn-secondary" type="button" id="btn-toggle-gh-token">👁️</button>
+                            </div>
+                            <small class="text-muted" id="shared-token-hint">Yalnızca yönetici cihazında token girip aşağıdaki "Herkes İçin Gömülü Kod Üret" ile tek hesaba sabitleyebilirsiniz.</small>
+                        </div>
+
+                        <div class="form-group" style="margin-top:0;">
+                            <label for="setting-gist-id">Gist ID (İsteğe Bağlı)</label>
+                            <input type="text" id="setting-gist-id" class="form-input"
+                                placeholder="Boş bırakılırsa otomatik bulunur / oluşturulur" />
+                            <small class="text-muted">Tüm kullanıcılar bu Gist ID altındaki kendi dosyasına yazar.</small>
+                        </div>
+                    </div>
+
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-primary" id="btn-cloud-sync-now">☁️ Şimdi Eşitle</button>
+                        <button type="button" class="btn btn-secondary" id="btn-cloud-pull">⬇️ Buluttan Çek</button>
+                        <button type="button" class="btn btn-accent" id="btn-cloud-push">⬆️ Buluta Gönder</button>
+                        <button type="button" class="btn btn-warning btn-sm" id="btn-generate-embedded-token">
+                            🔐 Herkes İçin Gömülü Kod Üret (Tek Hesap Modu)
+                        </button>
+                    </div>
+                    <div id="cloud-sync-feedback" class="feedback-banner" style="display:none"></div>
+                    <div id="embedded-token-output" class="feedback-banner" style="display:none;word-break:break-all;"></div>
+                </div>
+
                 <!-- iPhone & Mobil (App Store'suz PWA) Kurulum Rehberi -->
                 <div class="glass-panel mobile-guide-panel">
                     <h3>📱 iPhone & Android Mobil Uygulama Kurulum Rehberi (App Store'suz)</h3>
@@ -478,7 +542,8 @@
                                     destekli).</li>
                                 <li>Bilgisayardaki kelimelerinizi ve ilerlemenizi telefona taşımak için yukarıdan
                                     <strong>⬇️ JSON Yedeği İndir</strong> yapıp telefondan <strong>📂 JSON Dosyası Seç
-                                        ve Yükle</strong> kullanabilirsiniz.</li>
+                                        ve Yükle</strong> kullanabilirsiniz.
+                                </li>
                             </ol>
                         </div>
                     </div>
@@ -745,6 +810,37 @@
         </div>
     </div>
 
+    <!-- KULLANICI PROFİLİ SEÇİM MODALI (ÇOKLU KULLANICI) -->
+    <div id="username-prompt-modal" class="modal-overlay" style="display:none">
+        <div class="modal-window">
+            <div class="modal-header">
+                <div>
+                    <span class="stage-badge">Çoklu Kullanıcı Profili</span>
+                    <h2>👤 Hangi Kullanıcı Olarak Devam Etmek İstiyorsunuz?</h2>
+                </div>
+                <button class="modal-close-btn" id="btn-close-user-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted">
+                    İlerlemeniz kimseninkiyle karışmaz. Kendi kullanıcı adınızı yazın veya aşağıdan mevcut bir profili seçin:
+                </p>
+                <div class="form-group">
+                    <label for="modal-username-input">Kullanıcı Adınız (ör. eren, ahmet, zeynep)</label>
+                    <div class="input-with-btn">
+                        <input type="text" id="modal-username-input" class="form-input" placeholder="Adınızı yazın..." />
+                        <button type="button" class="btn btn-primary" id="btn-modal-switch-user">🚀 Profili Aç / Başla</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Buluttaki Mevcut Profiller (Tek Tıkla Geç)</label>
+                    <div id="modal-cloud-users-pills" class="scenario-pills">
+                        <small class="text-muted">Bulut kullanıcıları kontrol ediliyor...</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- KONFETİ & GÜN TAMAMLANDI KUTLAMA OVERLAY -->
     <canvas id="confetti-canvas"></canvas>
 
@@ -760,7 +856,22 @@
     <script>
         if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js').catch((err) => {
+                let refreshing = false;
+                navigator.serviceWorker.addEventListener('controllerchange', () => {
+                    if (!refreshing) {
+                        refreshing = true;
+                        window.location.reload();
+                    }
+                });
+                navigator.serviceWorker.register('./sw.js').then((reg) => {
+                    // Uygulama her açılışta ve odaklanmada arka planda yeni GitHub güncellemesi var mı kontrol eder
+                    reg.update().catch(() => {});
+                    document.addEventListener('visibilitychange', () => {
+                        if (document.visibilityState === 'visible') {
+                            reg.update().catch(() => {});
+                        }
+                    });
+                }).catch((err) => {
                     console.warn('Service Worker kaydı başarısız:', err);
                 });
             });

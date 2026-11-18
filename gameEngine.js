@@ -188,6 +188,7 @@ class GameEngine {
         day.updatedAt = new Date().toISOString();
         await window.dbManager.put("days", day);
         await window.dbManager.logDailyActivity(30, 0, null);
+        window.dbManager.scheduleCloudSync();
         return day;
     }
 
@@ -243,6 +244,7 @@ class GameEngine {
         day.updatedAt = new Date().toISOString();
         await window.dbManager.put("days", day);
         await window.dbManager.logDailyActivity(50, 0, null);
+        window.dbManager.scheduleCloudSync();
         return day;
     }
 
@@ -273,6 +275,7 @@ class GameEngine {
         }
 
         await window.dbManager.logDailyActivity(100, 1, evaluationObj.score);
+        window.dbManager.scheduleCloudSync();
         this.currentDayNumber = nextDayNum;
         return { completedDay: day, nextDay };
     }

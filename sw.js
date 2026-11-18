@@ -1,4 +1,4 @@
-const CACHE_NAME = 'linguaquest-pwa-v2';
+const CACHE_NAME = 'linguaquest-pwa-v4';
 
 const STATIC_ASSETS = [
   './',
@@ -17,7 +17,9 @@ const STATIC_ASSETS = [
 const BYPASS_HOSTS = [
   'googleapis.com',
   'mymemory.translated.net',
-  'dictionaryapi.dev'
+  'dictionaryapi.dev',
+  'api.github.com',
+  'gist.githubusercontent.com'
 ];
 
 self.addEventListener('install', (event) => {

@@ -1,10 +1,23 @@
-// db.js - IndexedDB Veri Kalıcılığı, SRS Motoru ve JSON Yedekleme/Geri Yükleme Katmanı
+// db.js - IndexedDB Veri Kalıcılığı, SRS Motoru ve Tek Hesap Çoklu Kullanıcı GitHub Gist Senkronizasyonu
 const DB_NAME = "LinguaQuestDB";
 const DB_VERSION = 1;
+
+// Tek GitHub Hesabı (Arkadaşların Token Girmemesi İçin) Şifreli Ortak Yapılandırma:
+// Ayarlar -> "Herkes İçin Gömülü Kod Üret" ile oluşturduğunuz kodu buraya yapıştırabilirsiniz.
+const SHARED_GIST_CONFIG = {
+    encodedToken: "",
+    gistId: ""
+};
+const CLOUD_CONFIG_STORAGE_KEY = "LQ_CLOUD_CONFIG_V1";
+const GIST_FILE_PREFIX = "linguaquest_user_";
+const GIST_FILE_SUFFIX = ".json";
 
 class DatabaseManager {
     constructor() {
         this.db = null;
+        this._cloudSyncTimer = null;
+        this._isRestoringOrSyncing = false;
+        this.onCloudStatusChange = null;
     }
 
     async init() {
@@ -186,6 +199,7 @@ class DatabaseManager {
         if (!profile) {
             await this.put("settings", {
                 key: "profile",
+                username: "",
                 xp: 0,
                 level: 1,
                 currentDay: 1,
@@ -198,8 +212,9 @@ class DatabaseManager {
                 theme: "dark",
                 avatar: "🧙‍♂️"
             });
-        } else if (!profile.cefrLevel) {
-            profile.cefrLevel = "B1";
+        } else if (!profile.cefrLevel || profile.username === undefined) {
+            if (!profile.cefrLevel) profile.cefrLevel = "B1";
+            if (profile.username === undefined) profile.username = "";
             await this.put("settings", profile);
         }
 
@@ -267,7 +282,10 @@ class DatabaseManager {
         }
 
         return new Promise((resolve) => {
-            tx.oncomplete = () => resolve(added);
+            tx.oncomplete = () => {
+                if (added > 0) this.scheduleCloudSync();
+                resolve(added);
+            };
         });
     }
 
@@ -368,7 +386,10 @@ class DatabaseManager {
         }
 
         return new Promise((resolve, reject) => {
-            tx.oncomplete = () => resolve(added);
+            tx.oncomplete = () => {
+                if (added > 0) this.scheduleCloudSync();
+                resolve(added);
+            };
             tx.onerror = () => reject(tx.error);
         });
     }
@@ -425,6 +446,7 @@ class DatabaseManager {
 
         word.updatedAt = now.toISOString();
         await this.put("vocabulary", word);
+        this.scheduleCloudSync();
         return word;
     }
 
@@ -449,6 +471,7 @@ class DatabaseManager {
 
         word.updatedAt = new Date().toISOString();
         await this.put("vocabulary", word);
+        this.scheduleCloudSync();
         return word;
     }
 
@@ -459,6 +482,7 @@ class DatabaseManager {
         word.meanings = newMeaningsArray;
         word.updatedAt = new Date().toISOString();
         await this.put("vocabulary", word);
+        this.scheduleCloudSync();
         return word;
     }
 
@@ -492,6 +516,7 @@ class DatabaseManager {
         entry.updatedAt = new Date().toISOString();
         await this.put("mistakes", entry);
         await this.updateWordSRS(termObj.id, "srs_fail");
+        this.scheduleCloudSync();
     }
 
     // Günlük Aktivite ve Seri (Streak) Güncelleme
@@ -537,6 +562,7 @@ class DatabaseManager {
 
             await this.put("settings", profile);
         }
+        this.scheduleCloudSync();
     }
 
     // Tüm Veritabanını JSON Olarak Dışa Aktar (MacBook <-> Windows Taşıma)
@@ -592,7 +618,7 @@ class DatabaseManager {
     }
 
     // Kelimeleri & Yan Anlamları Koru, Sadece İlerlemeyi Sıfırla
-    async resetProgressKeepWords() {
+    async resetProgressKeepWords(options = {}) {
         await this.clearStore("days");
         await this.clearStore("mistakes");
         await this.clearStore("activity");
@@ -624,9 +650,11 @@ class DatabaseManager {
         });
 
         const profile = await this.get("settings", "profile");
+        const preservedUsername = profile?.username || "";
         if (profile) {
             await this.put("settings", {
                 ...profile,
+                username: preservedUsername,
                 xp: 0,
                 level: 1,
                 currentDay: 1,
@@ -637,6 +665,15 @@ class DatabaseManager {
                 lastActiveDate: null
             });
         }
+
+        if (options?.syncResetToCloud !== false) {
+            try {
+                const cfg = await this.getCloudConfig();
+                if (cfg.githubToken && cfg.username) {
+                    await this.syncToGitHubGist({ silent: true, forceOverwrite: true });
+                }
+            } catch (_) {}
+        }
         return vocab.length;
     }
 
@@ -646,6 +683,9 @@ class DatabaseManager {
         if (!parsed || !parsed.stores) {
             throw new Error("Geçersiz yedek dosyası formatı!");
         }
+
+        const currentProfileBefore = await this.get("settings", "profile");
+        const currentUsername = currentProfileBefore?.username || "";
 
         const storeNames = ["vocabulary", "days", "mistakes", "activity", "settings"];
         for (const sName of storeNames) {
@@ -663,12 +703,13 @@ class DatabaseManager {
             }
         }
 
-        // Eğer "words_only" paketi yedek olarak yüklendiyse mevcut kullanıcının API Key'ini koruyarak ilerlemeyi sıfırla
+        // Eğer "words_only" paketi yedek olarak yüklendiyse mevcut kullanıcının API Key'ini ve username'ini koruyarak ilerlemeyi sıfırla
         if (parsed.mode === "words_only") {
             const profile = await this.get("settings", "profile");
             if (profile) {
                 await this.put("settings", {
                     ...profile,
+                    username: profile.username || currentUsername,
                     xp: 0,
                     level: 1,
                     currentDay: 1,
@@ -680,7 +721,644 @@ class DatabaseManager {
                 });
             }
         }
+        await this.seedInitialData();
+        this.scheduleCloudSync();
         return true;
+    }
+
+    // =========================================================================
+    // ÇOKLU KULLANICI & TEK GITHUB HESABI İLE GIST SENKRONİZASYONU
+    // =========================================================================
+    normalizeUsername(name) {
+        const trMap = { "ç": "c", "ğ": "g", "ı": "i", "ö": "o", "ş": "s", "ü": "u", "İ": "i" };
+        const clean = (name || "")
+            .toString()
+            .trim()
+            .replace(/[çğıöşüİ]/gi, (ch) => trMap[ch] || trMap[ch.toLowerCase()] || ch)
+            .toLowerCase()
+            .replace(/[^a-z0-9_]+/g, "_")
+            .replace(/^_+|_+$/g, "")
+            .slice(0, 32);
+        return clean;
+    }
+
+    getUserGistFilename(username) {
+        const norm = this.normalizeUsername(username);
+        return norm ? `${GIST_FILE_PREFIX}${norm}${GIST_FILE_SUFFIX}` : "";
+    }
+
+    encodeTokenForRepo(rawToken) {
+        const clean = (rawToken || "").trim();
+        if (!clean) return "";
+        const key = "LQ_GIST_SHARED_2026";
+        const reversed = clean.split("").reverse().join("");
+        const bytes = new TextEncoder().encode(reversed);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++) {
+            const xorByte = bytes[i] ^ key.charCodeAt(i % key.length);
+            bin += String.fromCharCode(xorByte);
+        }
+        return "LQENC:" + btoa(bin);
+    }
+
+    decodeRepoToken(encoded) {
+        try {
+            const val = (encoded || "").trim();
+            if (!val || !val.startsWith("LQENC:")) return "";
+            const key = "LQ_GIST_SHARED_2026";
+            const bin = atob(val.slice(6));
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) {
+                bytes[i] = bin.charCodeAt(i) ^ key.charCodeAt(i % key.length);
+            }
+            const reversed = new TextDecoder().decode(bytes);
+            return reversed.split("").reverse().join("");
+        } catch (_) {
+            return "";
+        }
+    }
+
+    async getCloudConfig() {
+        const dbCfg = await this.get("settings", "cloudConfig");
+        const profile = await this.get("settings", "profile");
+        let lsCfg = null;
+        try {
+            const raw = localStorage.getItem(CLOUD_CONFIG_STORAGE_KEY);
+            if (raw) lsCfg = JSON.parse(raw);
+        } catch (_) {}
+
+        const sharedToken = this.decodeRepoToken(SHARED_GIST_CONFIG.encodedToken);
+        const customToken = (dbCfg?.githubToken || lsCfg?.githubToken || "").trim();
+        const isSharedEmbedded = Boolean(sharedToken);
+        const githubToken = sharedToken || customToken;
+        const gistId = (SHARED_GIST_CONFIG.gistId || dbCfg?.gistId || lsCfg?.gistId || "").trim();
+        const username = this.normalizeUsername(profile?.username || dbCfg?.username || lsCfg?.username || "");
+
+        return {
+            key: "cloudConfig",
+            githubToken,
+            rawCustomToken: customToken,
+            gistId,
+            username,
+            autoSync: dbCfg?.autoSync ?? lsCfg?.autoSync ?? true,
+            lastSyncAt: dbCfg?.lastSyncAt || lsCfg?.lastSyncAt || null,
+            isSharedEmbedded
+        };
+    }
+
+    async saveCloudConfig(partialCfg) {
+        const current = await this.getCloudConfig();
+        const nextCustomToken = partialCfg.githubToken !== undefined
+            ? (partialCfg.githubToken || "").trim()
+            : current.rawCustomToken;
+        const nextGistId = partialCfg.gistId !== undefined
+            ? (partialCfg.gistId || "").trim()
+            : (current.gistId || "");
+        const nextUsername = partialCfg.username !== undefined
+            ? this.normalizeUsername(partialCfg.username)
+            : (current.username || "");
+
+        const storedObj = {
+            key: "cloudConfig",
+            githubToken: nextCustomToken,
+            gistId: nextGistId,
+            username: nextUsername,
+            autoSync: partialCfg.autoSync !== undefined ? partialCfg.autoSync : current.autoSync,
+            lastSyncAt: partialCfg.lastSyncAt !== undefined ? partialCfg.lastSyncAt : current.lastSyncAt
+        };
+
+        await this.put("settings", storedObj);
+        try {
+            localStorage.setItem(CLOUD_CONFIG_STORAGE_KEY, JSON.stringify(storedObj));
+        } catch (_) {}
+
+        if (partialCfg.username !== undefined) {
+            const profile = await this.get("settings", "profile");
+            if (profile) {
+                profile.username = nextUsername;
+                await this.put("settings", profile);
+            }
+        }
+
+        return this.getCloudConfig();
+    }
+
+    async buildCompactProgressPayload() {
+        const [vocab, days, mistakes, activity, profile] = await Promise.all([
+            this.getAll("vocabulary"),
+            this.getAll("days"),
+            this.getAll("mistakes"),
+            this.getAll("activity"),
+            this.get("settings", "profile")
+        ]);
+
+        const defaultMap = new Map();
+        if (typeof DEFAULT_WORDS !== "undefined") {
+            for (const dw of DEFAULT_WORDS) {
+                defaultMap.set((dw.term || "").toLowerCase(), dw);
+            }
+        }
+
+        const vocabDelta = [];
+        const customWords = [];
+
+        for (const v of vocab) {
+            const tKey = (v.term || "").toLowerCase();
+            const defItem = defaultMap.get(tKey);
+            const hasProgress =
+                (v.status && v.status !== "new") ||
+                (v.correctCount || 0) > 0 ||
+                (v.mistakeCount || 0) > 0 ||
+                (v.srsStage || 0) > 0 ||
+                (v.currentMeaningIndex || 0) > 0;
+
+            if (hasProgress) {
+                vocabDelta.push({
+                    id: v.id,
+                    term: v.term,
+                    status: v.status || "new",
+                    srsStage: v.srsStage || 0,
+                    nextReviewDate: v.nextReviewDate || null,
+                    currentMeaningIndex: v.currentMeaningIndex || 0,
+                    correctCount: v.correctCount || 0,
+                    mistakeCount: v.mistakeCount || 0,
+                    updatedAt: v.updatedAt || null,
+                    mStats: (v.meanings || []).map(m => ({
+                        tr: m.tr,
+                        a: m.askedCount || 0,
+                        c: m.correctCount || 0,
+                        w: m.wrongCount || 0
+                    }))
+                });
+            }
+
+            if (!defItem || (v.meanings || []).length > (defItem.meanings || []).length) {
+                customWords.push({
+                    id: v.id,
+                    term: v.term,
+                    category: v.category || "word",
+                    partOfSpeech: v.partOfSpeech || "word",
+                    cefr: v.cefr || "B1",
+                    meanings: v.meanings || [],
+                    customAdded: Boolean(v.customAdded)
+                });
+            }
+        }
+
+        return {
+            app: "LinguaQuest_AI_User_Sync",
+            version: 2,
+            username: this.normalizeUsername(profile?.username || ""),
+            savedAt: new Date().toISOString(),
+            profile: profile || null,
+            days: days || [],
+            mistakes: mistakes || [],
+            activity: activity || [],
+            vocabDelta,
+            customWords
+        };
+    }
+
+    async applyCompactProgressPayload(payload, { merge = true } = {}) {
+        if (!payload || typeof payload !== "object") return { applied: false };
+
+        this._isRestoringOrSyncing = true;
+        try {
+            const currentVocab = await this.getAll("vocabulary");
+            const byId = new Map(currentVocab.map(v => [v.id, v]));
+            const byTerm = new Map(currentVocab.map(v => [(v.term || "").toLowerCase(), v]));
+            const touchedVocab = new Map();
+            const stageRank = { new: 0, review: 1, learning: 2, mastered: 3 };
+
+            for (const cw of (payload.customWords || [])) {
+                const tKey = (cw.term || "").toLowerCase();
+                if (!tKey) continue;
+                const existing = byId.get(cw.id) || byTerm.get(tKey);
+                if (!existing) {
+                    const created = {
+                        ...cw,
+                        status: "new",
+                        srsStage: 0,
+                        nextReviewDate: null,
+                        currentMeaningIndex: 0,
+                        correctCount: 0,
+                        mistakeCount: 0,
+                        updatedAt: new Date().toISOString()
+                    };
+                    byId.set(created.id, created);
+                    byTerm.set(tKey, created);
+                    touchedVocab.set(created.id, created);
+                } else if ((cw.meanings || []).length > (existing.meanings || []).length) {
+                    const prevByTr = new Map((existing.meanings || []).map(m => [(m.tr || "").toLowerCase(), m]));
+                    existing.meanings = cw.meanings.map(m => {
+                        const prevM = prevByTr.get((m.tr || "").toLowerCase());
+                        return prevM
+                            ? { ...m, askedCount: prevM.askedCount || 0, correctCount: prevM.correctCount || 0, wrongCount: prevM.wrongCount || 0 }
+                            : { ...m };
+                    });
+                    touchedVocab.set(existing.id, existing);
+                }
+            }
+
+            for (const d of (payload.vocabDelta || [])) {
+                const tKey = (d.term || "").toLowerCase();
+                const target = byId.get(d.id) || (tKey ? byTerm.get(tKey) : null);
+                if (!target) continue;
+
+                if (!merge) {
+                    target.status = d.status || "new";
+                    target.srsStage = d.srsStage || 0;
+                    target.nextReviewDate = d.nextReviewDate || null;
+                    target.currentMeaningIndex = d.currentMeaningIndex || 0;
+                    target.correctCount = d.correctCount || 0;
+                    target.mistakeCount = d.mistakeCount || 0;
+                    target.updatedAt = d.updatedAt || new Date().toISOString();
+                } else {
+                    const localTotal = (target.correctCount || 0) + (target.mistakeCount || 0) + (target.srsStage || 0);
+                    const remoteTotal = (d.correctCount || 0) + (d.mistakeCount || 0) + (d.srsStage || 0);
+                    const remoteNewer = (d.updatedAt || "") > (target.updatedAt || "");
+
+                    target.correctCount = Math.max(target.correctCount || 0, d.correctCount || 0);
+                    target.mistakeCount = Math.max(target.mistakeCount || 0, d.mistakeCount || 0);
+                    target.srsStage = Math.max(target.srsStage || 0, d.srsStage || 0);
+
+                    if ((stageRank[d.status] || 0) > (stageRank[target.status] || 0) || (remoteNewer && remoteTotal >= localTotal)) {
+                        target.status = d.status || target.status;
+                        target.nextReviewDate = d.nextReviewDate ?? target.nextReviewDate;
+                        target.currentMeaningIndex = d.currentMeaningIndex ?? target.currentMeaningIndex;
+                        target.updatedAt = d.updatedAt || target.updatedAt;
+                    }
+                }
+
+                if (Array.isArray(d.mStats) && Array.isArray(target.meanings)) {
+                    const statsMap = new Map(d.mStats.map(s => [(s.tr || "").toLowerCase(), s]));
+                    target.meanings = target.meanings.map(m => {
+                        const rs = statsMap.get((m.tr || "").toLowerCase());
+                        if (!rs) return m;
+                        return {
+                            ...m,
+                            askedCount: merge ? Math.max(m.askedCount || 0, rs.a || 0) : (rs.a || 0),
+                            correctCount: merge ? Math.max(m.correctCount || 0, rs.c || 0) : (rs.c || 0),
+                            wrongCount: merge ? Math.max(m.wrongCount || 0, rs.w || 0) : (rs.w || 0)
+                        };
+                    });
+                }
+
+                touchedVocab.set(target.id, target);
+            }
+
+            if (touchedVocab.size > 0) {
+                const tx = this.db.transaction("vocabulary", "readwrite");
+                const store = tx.objectStore("vocabulary");
+                for (const item of touchedVocab.values()) store.put(item);
+                await new Promise((res, rej) => { tx.oncomplete = res; tx.onerror = () => rej(tx.error); });
+            }
+
+            const currentDays = await this.getAll("days");
+            const dayMap = new Map(currentDays.map(d => [d.dayNumber, d]));
+            const mergedDays = [];
+            for (const rd of (payload.days || [])) {
+                const ld = dayMap.get(rd.dayNumber);
+                if (!ld || !merge) {
+                    mergedDays.push(rd);
+                } else {
+                    const stageStatus = {};
+                    for (const k of [1, 2, 3, 4]) {
+                        const ls = ld.stageStatus?.[k] || {};
+                        const rs = rd.stageStatus?.[k] || {};
+                        stageStatus[k] = {
+                            ...ls,
+                            ...rs,
+                            unlocked: Boolean(ls.unlocked || rs.unlocked),
+                            completed: Boolean(ls.completed || rs.completed),
+                            decisions: { ...(ls.decisions || {}), ...(rs.decisions || {}) },
+                            results: (rs.results?.length || 0) >= (ls.results?.length || 0) ? (rs.results || []) : (ls.results || [])
+                        };
+                    }
+                    mergedDays.push({
+                        ...ld,
+                        ...rd,
+                        unlocked: Boolean(ld.unlocked || rd.unlocked),
+                        completed: Boolean(ld.completed || rd.completed),
+                        currentStage: Math.max(ld.currentStage || 1, rd.currentStage || 1),
+                        stageStatus
+                    });
+                }
+            }
+            if (mergedDays.length > 0) {
+                const txD = this.db.transaction("days", "readwrite");
+                const stD = txD.objectStore("days");
+                for (const d of mergedDays) stD.put(d);
+                await new Promise((res, rej) => { txD.oncomplete = res; txD.onerror = () => rej(txD.error); });
+            }
+
+            const currentMistakes = await this.getAll("mistakes");
+            const mistakeMap = new Map(currentMistakes.map(m => [m.termId, m]));
+            const mergedMistakes = [];
+            for (const rm of (payload.mistakes || [])) {
+                const lm = mistakeMap.get(rm.termId);
+                if (!lm || !merge) {
+                    mergedMistakes.push(rm);
+                } else {
+                    const useRemote = (rm.updatedAt || "") >= (lm.updatedAt || "");
+                    mergedMistakes.push({
+                        ...(useRemote ? rm : lm),
+                        errorCount: Math.max(lm.errorCount || 0, rm.errorCount || 0)
+                    });
+                }
+            }
+            if (mergedMistakes.length > 0) {
+                const txM = this.db.transaction("mistakes", "readwrite");
+                const stM = txM.objectStore("mistakes");
+                for (const m of mergedMistakes) stM.put(m);
+                await new Promise((res, rej) => { txM.oncomplete = res; txM.onerror = () => rej(txM.error); });
+            }
+
+            const currentAct = await this.getAll("activity");
+            const actMap = new Map(currentAct.map(a => [a.date, a]));
+            const mergedAct = [];
+            for (const ra of (payload.activity || [])) {
+                const la = actMap.get(ra.date);
+                if (!la || !merge) {
+                    mergedAct.push(ra);
+                } else {
+                    mergedAct.push({
+                        date: ra.date,
+                        xpEarned: Math.max(la.xpEarned || 0, ra.xpEarned || 0),
+                        sentencesCount: Math.max(la.sentencesCount || 0, ra.sentencesCount || 0),
+                        actionsCount: Math.max(la.actionsCount || 0, ra.actionsCount || 0)
+                    });
+                }
+            }
+            if (mergedAct.length > 0) {
+                const txA = this.db.transaction("activity", "readwrite");
+                const stA = txA.objectStore("activity");
+                for (const a of mergedAct) stA.put(a);
+                await new Promise((res, rej) => { txA.oncomplete = res; txA.onerror = () => rej(txA.error); });
+            }
+
+            if (payload.profile) {
+                const lp = await this.get("settings", "profile");
+                const rp = payload.profile;
+                const allDaysAfter = await this.getAll("days");
+                const completedDays = allDaysAfter.filter(d => d.completed).length;
+                const activeUsername = this.normalizeUsername(lp?.username || payload.username || rp.username || "");
+
+                if (!lp || !merge) {
+                    await this.put("settings", {
+                        ...rp,
+                        key: "profile",
+                        username: activeUsername,
+                        completedDaysCount: Math.max(rp.completedDaysCount || 0, completedDays)
+                    });
+                } else {
+                    const maxXp = Math.max(lp.xp || 0, rp.xp || 0);
+                    const lastDateL = lp.lastActiveDate || "";
+                    const lastDateR = rp.lastActiveDate || "";
+                    let bestStreak = lp.streak || 0;
+                    let bestLastDate = lastDateL || null;
+                    if (lastDateR > lastDateL) {
+                        bestStreak = rp.streak || 0;
+                        bestLastDate = lastDateR;
+                    } else if (lastDateR === lastDateL) {
+                        bestStreak = Math.max(lp.streak || 0, rp.streak || 0);
+                    }
+
+                    await this.put("settings", {
+                        ...lp,
+                        username: activeUsername,
+                        xp: maxXp,
+                        level: Math.floor(maxXp / 250) + 1,
+                        currentDay: Math.max(lp.currentDay || 1, rp.currentDay || 1),
+                        cefrLevel: rp.cefrLevel || lp.cefrLevel || "B1",
+                        totalSentencesTranslated: Math.max(lp.totalSentencesTranslated || 0, rp.totalSentencesTranslated || 0),
+                        accuracySum: Math.max(lp.accuracySum || 0, rp.accuracySum || 0),
+                        completedDaysCount: Math.max(lp.completedDaysCount || 0, rp.completedDaysCount || 0, completedDays),
+                        streak: bestStreak,
+                        lastActiveDate: bestLastDate,
+                        avatar: lp.avatar || rp.avatar || "🧙‍♂️",
+                        theme: lp.theme || rp.theme || "dark"
+                    });
+                }
+            }
+
+            return { applied: true, restoredWords: touchedVocab.size, restoredDays: mergedDays.length };
+        } finally {
+            this._isRestoringOrSyncing = false;
+        }
+    }
+
+    async githubRequest(url, options = {}, token = "") {
+        const headers = {
+            "Accept": "application/vnd.github+json",
+            "Authorization": `Bearer ${token}`,
+            ...(options.headers || {})
+        };
+        if (options.body && !headers["Content-Type"]) {
+            headers["Content-Type"] = "application/json";
+        }
+        const res = await fetch(url, { ...options, headers, cache: "no-store" });
+        if (!res.ok) {
+            let msg = `GitHub API Hatası (${res.status})`;
+            try {
+                const errJson = await res.json();
+                if (errJson?.message) msg += `: ${errJson.message}`;
+            } catch (_) {}
+            throw new Error(msg);
+        }
+        return res.json();
+    }
+
+    async findOrCreateGistId(token, existingGistId = "", fallbackFilename = "") {
+        if (existingGistId) {
+            try {
+                const gist = await this.githubRequest(`https://api.github.com/gists/${existingGistId}`, { method: "GET" }, token);
+                if (gist?.id) return gist;
+            } catch (_) {}
+        }
+
+        const gists = await this.githubRequest("https://api.github.com/gists?per_page=50", { method: "GET" }, token);
+        const found = (gists || []).find(g => {
+            if (!g.files) return false;
+            return Object.keys(g.files).some(fn => fn.startsWith(GIST_FILE_PREFIX) || fn === "linguaquest_cloud_sync.json");
+        });
+        if (found) {
+            const fullGist = await this.githubRequest(`https://api.github.com/gists/${found.id}`, { method: "GET" }, token);
+            await this.saveCloudConfig({ gistId: fullGist.id });
+            return fullGist;
+        }
+
+        const initialFilename = fallbackFilename || "linguaquest_user_default.json";
+        const initialPayload = await this.buildCompactProgressPayload();
+        const created = await this.githubRequest("https://api.github.com/gists", {
+            method: "POST",
+            body: JSON.stringify({
+                description: "LinguaQuest AI — Çoklu Kullanıcı Otomatik İlerleme Gist'i (Secret)",
+                public: false,
+                files: {
+                    [initialFilename]: {
+                        content: JSON.stringify(initialPayload)
+                    }
+                }
+            })
+        }, token);
+        await this.saveCloudConfig({ gistId: created.id });
+        return created;
+    }
+
+    async readFileFromGist(gistObj, filename, token) {
+        const file = gistObj?.files?.[filename];
+        if (!file) return null;
+        let text = file.content || "";
+        if (file.truncated && file.raw_url) {
+            const rawRes = await fetch(file.raw_url, {
+                headers: { "Authorization": `Bearer ${token}` },
+                cache: "no-store"
+            });
+            if (rawRes.ok) text = await rawRes.text();
+        }
+        if (!text.trim()) return null;
+        return JSON.parse(text);
+    }
+
+    async listCloudUsers() {
+        const cfg = await this.getCloudConfig();
+        if (!cfg.githubToken) return [];
+        const gist = await this.findOrCreateGistId(cfg.githubToken, cfg.gistId);
+        const files = Object.keys(gist?.files || {});
+        return files
+            .filter(fn => fn.startsWith(GIST_FILE_PREFIX) && fn.endsWith(GIST_FILE_SUFFIX))
+            .map(fn => fn.slice(GIST_FILE_PREFIX.length, -GIST_FILE_SUFFIX.length))
+            .sort();
+    }
+
+    async pullFromGitHubGist({ silent = false, merge = true } = {}) {
+        const cfg = await this.getCloudConfig();
+        if (!cfg.githubToken) {
+            if (silent) return { skipped: true };
+            throw new Error("GitHub Gist bağlantısı yapılandırılmamış.");
+        }
+        if (!cfg.username) {
+            if (silent) return { skipped: true, needsUsername: true };
+            throw new Error("Önce bir kullanıcı adı belirleyin veya seçin.");
+        }
+
+        const filename = this.getUserGistFilename(cfg.username);
+        if (this.onCloudStatusChange) this.onCloudStatusChange("syncing");
+        try {
+            const gist = await this.findOrCreateGistId(cfg.githubToken, cfg.gistId, filename);
+            const remotePayload = await this.readFileFromGist(gist, filename, cfg.githubToken);
+            let result = { applied: false, gistId: gist.id, filename, fileFound: Boolean(remotePayload) };
+            if (remotePayload) {
+                const mergeRes = await this.applyCompactProgressPayload(remotePayload, { merge });
+                result = { ...mergeRes, gistId: gist.id, filename, fileFound: true, remoteSavedAt: remotePayload.savedAt };
+            }
+            const nowIso = new Date().toISOString();
+            await this.saveCloudConfig({ gistId: gist.id, lastSyncAt: nowIso });
+            if (this.onCloudStatusChange) this.onCloudStatusChange("synced", nowIso);
+            return result;
+        } catch (err) {
+            if (this.onCloudStatusChange) this.onCloudStatusChange("error", err.message);
+            if (!silent) throw err;
+            return { error: err.message };
+        }
+    }
+
+    async syncToGitHubGist({ silent = false, forceOverwrite = false } = {}) {
+        const cfg = await this.getCloudConfig();
+        if (!cfg.githubToken) {
+            if (silent) return { skipped: true };
+            throw new Error("GitHub Gist bağlantısı yapılandırılmamış.");
+        }
+        if (!cfg.username) {
+            if (silent) return { skipped: true, needsUsername: true };
+            throw new Error("Önce bir kullanıcı adı belirleyin veya seçin.");
+        }
+
+        const filename = this.getUserGistFilename(cfg.username);
+        if (this.onCloudStatusChange) this.onCloudStatusChange("syncing");
+        try {
+            const gist = await this.findOrCreateGistId(cfg.githubToken, cfg.gistId, filename);
+            if (!forceOverwrite) {
+                const remotePayload = await this.readFileFromGist(gist, filename, cfg.githubToken);
+                if (remotePayload) {
+                    await this.applyCompactProgressPayload(remotePayload, { merge: true });
+                }
+            }
+
+            const payload = await this.buildCompactProgressPayload();
+            const jsonStr = JSON.stringify(payload);
+            await this.githubRequest(`https://api.github.com/gists/${gist.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({
+                    files: {
+                        [filename]: {
+                            content: jsonStr
+                        }
+                    }
+                })
+            }, cfg.githubToken);
+
+            const nowIso = new Date().toISOString();
+            await this.saveCloudConfig({ gistId: gist.id, lastSyncAt: nowIso });
+            if (this.onCloudStatusChange) this.onCloudStatusChange("synced", nowIso);
+            return {
+                ok: true,
+                gistId: gist.id,
+                filename,
+                username: cfg.username,
+                lastSyncAt: nowIso,
+                bytes: jsonStr.length,
+                vocabCount: payload.vocabDelta.length,
+                daysCount: payload.days.length
+            };
+        } catch (err) {
+            if (this.onCloudStatusChange) this.onCloudStatusChange("error", err.message);
+            if (!silent) throw err;
+            return { error: err.message };
+        }
+    }
+
+    async switchUserProfile(newUsername) {
+        const norm = this.normalizeUsername(newUsername);
+        if (!norm) {
+            throw new Error("Lütfen geçerli bir kullanıcı adı girin (harf/rakam).");
+        }
+
+        const prevCfg = await this.getCloudConfig();
+        if (prevCfg.githubToken && prevCfg.username && prevCfg.username !== norm) {
+            await this.syncToGitHubGist({ silent: true });
+        }
+
+        await this.resetProgressKeepWords({ syncResetToCloud: false });
+        await this.saveCloudConfig({ username: norm });
+
+        let loadedFromCloud = false;
+        let gistId = prevCfg.gistId || "";
+        if (prevCfg.githubToken) {
+            const pullRes = await this.pullFromGitHubGist({ silent: false, merge: false });
+            gistId = pullRes?.gistId || gistId;
+            if (pullRes?.applied) {
+                loadedFromCloud = true;
+            } else {
+                await this.syncToGitHubGist({ silent: true, forceOverwrite: true });
+            }
+        }
+
+        return { username: norm, loadedFromCloud, gistId };
+    }
+
+    scheduleCloudSync() {
+        if (this._isRestoringOrSyncing) return;
+        if (this._cloudSyncTimer) clearTimeout(this._cloudSyncTimer);
+        this._cloudSyncTimer = setTimeout(async () => {
+            try {
+                const cfg = await this.getCloudConfig();
+                if (cfg.githubToken && cfg.username && cfg.autoSync !== false) {
+                    await this.syncToGitHubGist({ silent: true });
+                }
+            } catch (_) {}
+        }, 4000);
     }
 }
 
