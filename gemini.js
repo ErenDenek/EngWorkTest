@@ -7,7 +7,7 @@ class GeminiService {
 
     async getConfig() {
         const cfg = await window.dbManager.get("settings", "aiConfig");
-        return cfg || { apiKey: "", model: "gemini-2.5-flash", preferredScenario: "Günlük Hayat" };
+        return cfg || { apiKey: "", model: "gemini-3.8-flash", preferredScenario: "Günlük Hayat" };
     }
 
     async isLiveMode() {
@@ -39,12 +39,14 @@ class GeminiService {
         const data = await response.json();
         const rawModels = Array.isArray(data.models) ? data.models : [];
 
-        // Sadece metin/içerik üretimi (generateContent) destekleyen gemini modellerini filtrele ve sırala
+        // Sadece metin/JSON üretimine uygun gemini modellerini filtrele (TTS/Image/Audio/Embedding hariç)
+        const excludedRe = /(-tts|-image|-audio|embedding|aqa|imagen|veo|lyria|robotics|computer-use)/i;
         const supported = rawModels
             .filter(m =>
                 Array.isArray(m.supportedGenerationMethods) &&
                 m.supportedGenerationMethods.includes("generateContent") &&
-                m.name.includes("gemini")
+                m.name.includes("gemini") &&
+                !excludedRe.test(m.name)
             )
             .map(m => {
                 const shortId = m.name.replace(/^models\//, "");
@@ -64,7 +66,7 @@ class GeminiService {
     async callGeminiJSON(systemInstruction, userPrompt) {
         const cfg = await this.getConfig();
         const apiKey = (cfg.apiKey || "").trim();
-        const model = cfg.model || "gemini-2.5-flash";
+        const model = cfg.model || "gemini-3.8-flash";
 
         if (!apiKey) {
             throw new Error("NO_API_KEY");

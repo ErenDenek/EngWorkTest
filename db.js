@@ -1013,8 +1013,9 @@ class DatabaseManager {
             profile: profile || null,
             aiConfig: aiConfig ? {
                 encodedApiKey: aiConfig.apiKey ? this.encodeTokenForRepo(aiConfig.apiKey) : "",
-                model: aiConfig.model || "gemini-2.5-flash",
-                preferredScenario: aiConfig.preferredScenario || "Günlük Hayat"
+                model: aiConfig.model || "gemini-3.8-flash",
+                preferredScenario: aiConfig.preferredScenario || "Günlük Hayat",
+                updatedAt: aiConfig.updatedAt || null
             } : null,
             days: days || [],
             mistakes: mistakes || [],
@@ -1251,19 +1252,43 @@ class DatabaseManager {
                 const existingAi = (await this.get("settings", "aiConfig")) || {
                     key: "aiConfig",
                     apiKey: "",
-                    model: "gemini-2.5-flash",
-                    preferredScenario: "Günlük Hayat"
+                    model: "gemini-3.8-flash",
+                    preferredScenario: "Günlük Hayat",
+                    updatedAt: ""
                 };
                 const decodedKey = payload.aiConfig.encodedApiKey
                     ? this.decodeRepoToken(payload.aiConfig.encodedApiKey)
                     : (payload.aiConfig.apiKey || "");
-                await this.put("settings", {
-                    ...existingAi,
-                    key: "aiConfig",
-                    apiKey: decodedKey || (merge ? (existingAi.apiKey || "") : ""),
-                    model: payload.aiConfig.model || existingAi.model || "gemini-2.5-flash",
-                    preferredScenario: payload.aiConfig.preferredScenario || existingAi.preferredScenario || "Günlük Hayat"
-                });
+
+                if (!merge) {
+                    await this.put("settings", {
+                        ...existingAi,
+                        key: "aiConfig",
+                        apiKey: decodedKey || "",
+                        model: payload.aiConfig.model || "gemini-3.8-flash",
+                        preferredScenario: payload.aiConfig.preferredScenario || "Günlük Hayat",
+                        updatedAt: payload.aiConfig.updatedAt || payload.savedAt || ""
+                    });
+                } else {
+                    const localTs = existingAi.updatedAt || "";
+                    const remoteTs = payload.aiConfig.updatedAt || payload.savedAt || "";
+                    const remoteIsNewer = Boolean(remoteTs && remoteTs > localTs);
+
+                    await this.put("settings", {
+                        ...existingAi,
+                        key: "aiConfig",
+                        apiKey: remoteIsNewer
+                            ? (decodedKey || existingAi.apiKey || "")
+                            : (existingAi.apiKey || decodedKey || ""),
+                        model: remoteIsNewer
+                            ? (payload.aiConfig.model || existingAi.model || "gemini-3.8-flash")
+                            : (existingAi.model || payload.aiConfig.model || "gemini-3.8-flash"),
+                        preferredScenario: remoteIsNewer
+                            ? (payload.aiConfig.preferredScenario || existingAi.preferredScenario || "Günlük Hayat")
+                            : (existingAi.preferredScenario || payload.aiConfig.preferredScenario || "Günlük Hayat"),
+                        updatedAt: remoteIsNewer ? remoteTs : (localTs || remoteTs)
+                    });
+                }
             }
 
             return { applied: true, restoredWords: touchedVocab.size, restoredDays: mergedDays.length };
@@ -1502,8 +1527,9 @@ class DatabaseManager {
             ...(existingAi || {}),
             key: "aiConfig",
             apiKey: "",
-            model: "gemini-2.5-flash",
-            preferredScenario: "Günlük Hayat"
+            model: "gemini-3.8-flash",
+            preferredScenario: "Günlük Hayat",
+            updatedAt: ""
         });
 
         await this.saveCloudConfig({ username: displayName });

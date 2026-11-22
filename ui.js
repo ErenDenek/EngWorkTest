@@ -362,7 +362,8 @@ class UIController {
                 ...aiConfig,
                 key: "aiConfig",
                 apiKey: keyVal,
-                model: modelVal
+                model: modelVal,
+                updatedAt: new Date().toISOString()
             });
             document.getElementById("api-onboarding-modal").style.display = "none";
             await this.updateHUD();
@@ -2388,7 +2389,8 @@ class UIController {
             key: "aiConfig",
             apiKey,
             model,
-            preferredScenario: this.activeScenario
+            preferredScenario: this.activeScenario,
+            updatedAt: new Date().toISOString()
         });
 
         const profile = await window.dbManager.get("settings", "profile");
@@ -2716,12 +2718,14 @@ class UIController {
                 banner.textContent = "ℹ️ API anahtarı girilmediği için uygulama şu an Akıllı Demo Modunda çalışıyor.";
                 return;
             }
+            const activeCfg = await window.geminiService.getConfig();
+            banner.textContent = `⏳ "${activeCfg.model}" modeli test ediliyor...`;
             const res = await window.geminiService.callGeminiJSON(
                 "Return a JSON object with status ok.",
                 "Respond with: {\"status\": \"OK\", \"message\": \"Gemini API bağlantısı başarılı!\"}"
             );
             banner.style.background = "rgba(16, 185, 129, 0.2)";
-            banner.textContent = `✅ Bağlantı Başarılı: ${res.message || "Gemini modeli yanıt verdi!"}`;
+            banner.textContent = `✅ Bağlantı Başarılı (${activeCfg.model}): ${res.message || "Gemini modeli yanıt verdi!"}`;
         } catch (err) {
             banner.style.background = "rgba(239, 68, 68, 0.2)";
             banner.textContent = `❌ Bağlantı Hatası: ${err.message}`;
