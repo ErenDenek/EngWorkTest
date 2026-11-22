@@ -1,4 +1,4 @@
-const CACHE_NAME = 'linguaquest-pwa-v1.5.1';
+const CACHE_NAME = 'linguaquest-pwa-v1.5.3';
 
 const STATIC_ASSETS = [
   './',
@@ -70,9 +70,9 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Network-First stratejisi: güncel dosyayı ağdan al, çevrimdışıysa önbellekten sun
+  // Network-First (HTTP önbelleğini atlayarak GitHub Pages'ten her zaman en güncel dosyayı çeker)
   event.respondWith(
-    fetch(request)
+    fetch(request, { cache: 'no-cache' })
       .then((networkResponse) => {
         if (networkResponse && networkResponse.ok) {
           const copy = networkResponse.clone();

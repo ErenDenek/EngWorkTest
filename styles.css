@@ -1748,10 +1748,16 @@ body {
         gap: 0.55rem;
     }
 
-    body.mobile-focus-mode .focus-back-btn {
-        padding: 0.4rem 0.7rem;
-        font-size: 0.8rem;
+    body.mobile-focus-mode .focus-back-btn,
+    body.mobile-focus-mode .focus-master-btn {
+        padding: 0.36rem 0.62rem;
+        font-size: 0.76rem;
         flex-shrink: 0;
+        white-space: nowrap;
+    }
+
+    body.mobile-focus-mode .focus-quiz-type-pill {
+        display: none;
     }
 
     body.mobile-focus-mode .quiz-container-box.quiz-mc-mode {

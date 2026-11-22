@@ -19,7 +19,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="styles.css?v=1.5.3" />
 </head>
 
 <body>
@@ -697,12 +697,12 @@
     <div id="toast-container"></div>
 
     <!-- Modüler Scriptler -->
-    <script src="cloudConfig.js"></script>
-    <script src="defaultWords.js"></script>
-    <script src="db.js"></script>
-    <script src="gemini.js"></script>
-    <script src="gameEngine.js"></script>
-    <script src="ui.js"></script>
+    <script src="cloudConfig.js?v=1.5.3"></script>
+    <script src="defaultWords.js?v=1.5.3"></script>
+    <script src="db.js?v=1.5.3"></script>
+    <script src="gemini.js?v=1.5.3"></script>
+    <script src="gameEngine.js?v=1.5.3"></script>
+    <script src="ui.js?v=1.5.3"></script>
     <script>
         if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
             window.addEventListener('load', () => {
@@ -713,7 +713,7 @@
                         window.location.reload();
                     }
                 });
-                navigator.serviceWorker.register('./sw.js').then((reg) => {
+                navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((reg) => {
                     // Uygulama her açılışta ve odaklanmada arka planda yeni GitHub güncellemesi var mı kontrol eder
                     reg.update().catch(() => {});
                     document.addEventListener('visibilitychange', () => {

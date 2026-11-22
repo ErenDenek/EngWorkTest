@@ -97,7 +97,10 @@ class UIController {
                 const targetId = btn.getAttribute("data-tab");
                 document.getElementById(targetId).classList.add("active");
 
-                if (targetId === "vocab-view") await this.renderVocabLibrary();
+                if (targetId === "vocab-view") {
+                    await this.applySavedVocabLibraryPrefs();
+                    await this.renderVocabLibrary();
+                }
                 if (targetId === "stats-view") await this.renderStatsDashboard();
                 if (targetId === "settings-view") await this.loadSettingsForm();
                 if (targetId === "map-view") await this.renderMapAndQuest();
@@ -116,7 +119,9 @@ class UIController {
             const profile = await window.dbManager.get("settings", "profile");
             if (profile) {
                 profile.theme = next;
+                profile.prefsUpdatedAt = new Date().toISOString();
                 await window.dbManager.put("settings", profile);
+                window.dbManager.scheduleCloudSync();
             }
         });
 
@@ -281,16 +286,29 @@ class UIController {
         // Dışarıdan Toplu JSON / CSV Yükle (Oxford 3000 / NGSL Formatı)
         document.getElementById("input-bulk-vocab").addEventListener("change", (e) => this.handleBulkVocabUpload(e));
 
-        // Kelime Arama, Sıralama & Alt Sekme Filtreleme
+        // Kelime Arama, Sıralama & Alt Sekme Filtreleme (Tercihler profile kaydedilir)
+        const persistVocabLibraryPrefs = () => {
+            window.dbManager.saveProfilePrefs({
+                vocabLibraryPrefs: {
+                    subtab: this.activeVocabSubtab,
+                    filterStatus: document.getElementById("vocab-filter-status")?.value || "all",
+                    filterCefr: document.getElementById("vocab-filter-cefr")?.value || "all",
+                    sortOrder: document.getElementById("vocab-sort-order")?.value || "default"
+                }
+            }).catch(() => {});
+        };
+
         ["vocab-search", "vocab-filter-status", "vocab-filter-cefr", "vocab-sort-order"].forEach(id => {
             const el = document.getElementById(id);
             if (el) {
                 el.addEventListener("input", () => {
                     this.vocabRenderLimit = 100;
+                    if (id !== "vocab-search") persistVocabLibraryPrefs();
                     this.renderVocabLibrary();
                 });
                 el.addEventListener("change", () => {
                     this.vocabRenderLimit = 100;
+                    if (id !== "vocab-search") persistVocabLibraryPrefs();
                     this.renderVocabLibrary();
                 });
             }
@@ -306,6 +324,7 @@ class UIController {
                     const sortEl = document.getElementById("vocab-sort-order");
                     if (sortEl) sortEl.value = "most_wrong";
                 }
+                persistVocabLibraryPrefs();
                 this.renderVocabLibrary();
             });
         });
@@ -1008,30 +1027,36 @@ class UIController {
     }
 
     // AŞAMA 1 & 2 İÇİN HAVUZDAN KARIŞIK, TEKİL YAN ANLAM ODAKLI TEST (ŞIKLI + YAZMALI)
-    async renderMultipleChoiceQuiz(dayNumber, stageNum, stageItems, currentDecisions, questionTypeMode = "mixed") {
+    async renderMultipleChoiceQuiz(dayNumber, stageNum, stageItems, currentDecisions, questionTypeMode = null) {
         const overlay = document.getElementById("stage-modal-overlay");
         const body = document.getElementById("stage-modal-body");
         const allVocab = await window.dbManager.getAll("vocabulary");
         const profile = await window.dbManager.get("settings", "profile");
         const userCefr = profile?.cefrLevel || "B1";
+        const prefs = await window.dbManager.getProfilePrefs();
+        const activeMode = questionTypeMode || prefs.stageQuizMode || "mixed";
 
         const isWordsStage = stageNum === 1;
         const targetCategory = isWordsStage ? "word" : "phrase";
         const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
+        // Ustalaşılan kelimeleri testlerde gösterme (aşamanın tüm kelimeleri zaten ustalaşılmadıysa)
+        const nonMasteredStageItems = stageItems.filter(si => si.status !== "mastered");
+        const activeStageItems = nonMasteredStageItems.length > 0 ? nonMasteredStageItems : stageItems;
+
         const waitingPool = allVocab.filter(v =>
             v.category === targetCategory &&
             v.status !== "mastered" &&
-            !stageItems.some(si => si.id === v.id)
+            !activeStageItems.some(si => si.id === v.id)
         );
 
         const cefrMatchedPool = shuffle(waitingPool.filter(v => v.cefr === userCefr));
         const otherWaitingPool = shuffle(waitingPool.filter(v => v.cefr !== userCefr));
         const extraPoolItems = [...cefrMatchedPool, ...otherWaitingPool].slice(0, 5);
 
-        const quizPool = shuffle([...stageItems, ...extraPoolItems]);
+        const quizPool = shuffle([...activeStageItems, ...extraPoolItems]);
         const questions = quizPool.map((item, idx) =>
-            this.buildVocabQuizQuestion(item, idx, allVocab, targetCategory, questionTypeMode)
+            this.buildVocabQuizQuestion(item, idx, allVocab, targetCategory, activeMode)
         );
 
         let qIndex = 0;
@@ -1068,10 +1093,11 @@ class UIController {
                         </div>
                         <span class="focus-quiz-counter">${qIndex + 1} / ${questions.length}</span>
                     </div>
+                    <button type="button" class="btn btn-warning btn-sm focus-master-btn" id="btn-stage-quiz-master" title="Bu kelimede ustalaştım — bir daha testlerde gösterme">👑 Ustalaş</button>
                     <div class="scenario-pills quiz-mode-pills">
-                        <button type="button" class="scenario-pill ${questionTypeMode === "mixed" ? "active" : ""}" data-qmode="mixed">🔀 Karışık</button>
-                        <button type="button" class="scenario-pill ${questionTypeMode === "write_only" ? "active" : ""}" data-qmode="write_only">⌨️ Yazmalı</button>
-                        <button type="button" class="scenario-pill ${questionTypeMode === "mc_only" ? "active" : ""}" data-qmode="mc_only">🔘 Şıklı</button>
+                        <button type="button" class="scenario-pill ${activeMode === "mixed" ? "active" : ""}" data-qmode="mixed">🔀 Karışık</button>
+                        <button type="button" class="scenario-pill ${activeMode === "write_only" ? "active" : ""}" data-qmode="write_only">⌨️ Yazmalı</button>
+                        <button type="button" class="scenario-pill ${activeMode === "mc_only" ? "active" : ""}" data-qmode="mc_only">🔘 Şıklı</button>
                     </div>
                 </div>
 
@@ -1085,10 +1111,18 @@ class UIController {
                 </div>` : ""}
             `;
 
+            document.getElementById("btn-stage-quiz-master")?.addEventListener("click", async () => {
+                await window.dbManager.updateWordSRS(q.termObj.id, "mastered");
+                currentDecisions[q.termObj.id] = "mastered";
+                this.showToast(`👑 "${q.termObj.term}" ustalaşıldı! Artık testlerde gösterilmeyecek.`);
+                advanceStep();
+            });
+
             body.querySelectorAll("[data-qmode]").forEach(mBtn => {
-                mBtn.addEventListener("click", () => {
+                mBtn.addEventListener("click", async () => {
                     this.clearActiveQuizListeners();
                     const nextMode = mBtn.getAttribute("data-qmode");
+                    await window.dbManager.saveProfilePrefs({ stageQuizMode: nextMode });
                     this.renderMultipleChoiceQuiz(dayNumber, stageNum, stageItems, currentDecisions, nextMode);
                 });
             });
@@ -2788,6 +2822,24 @@ class UIController {
         }
     }
 
+    async applySavedVocabLibraryPrefs() {
+        const prefs = await window.dbManager.getProfilePrefs();
+        const vp = prefs.vocabLibraryPrefs;
+        if (!vp) return;
+        if (vp.subtab) {
+            this.activeVocabSubtab = vp.subtab;
+            document.querySelectorAll("#vocab-subtabs .vocab-subtab-btn").forEach(b => {
+                b.classList.toggle("active", b.getAttribute("data-subtab") === vp.subtab);
+            });
+        }
+        const stEl = document.getElementById("vocab-filter-status");
+        const cefrEl = document.getElementById("vocab-filter-cefr");
+        const sortEl = document.getElementById("vocab-sort-order");
+        if (stEl && vp.filterStatus) stEl.value = vp.filterStatus;
+        if (cefrEl && vp.filterCefr) cefrEl.value = vp.filterCefr;
+        if (sortEl && vp.sortOrder) sortEl.value = vp.sortOrder;
+    }
+
     // =========================================================================
     // 6.A SERBEST CÜMLE PRATİĞİ (ÖN SEÇİM EKRANI + 3 KATMANLI AI ARENASI)
     // =========================================================================
@@ -2797,16 +2849,18 @@ class UIController {
         const container = document.getElementById("sentence-practice-container");
         const allVocab = await window.dbManager.getAll("vocabulary");
         const profile = await window.dbManager.get("settings", "profile");
+        const prefs = await window.dbManager.getProfilePrefs();
+        const savedSp = prefs.sentencePracticeConfig || {};
 
         const learningItems = allVocab.filter(v => v.status === "learning" || v.status === "review");
-        const mistakeItems = allVocab.filter(v => (v.mistakeCount || 0) > 0);
+        const mistakeItems = allVocab.filter(v => (v.mistakeCount || 0) > 0 && v.status !== "mastered");
         const masteredItems = allVocab.filter(v => v.status === "mastered");
 
         const setupState = {
-            sourcePool: "learning", // 'random_all' | 'learning' | 'mistakes' | 'mastered'
-            cefrLevel: profile?.cefrLevel || "B1", // 'MIXED' | 'A1' | 'A2' | 'B1' | 'B2' | 'C1'
-            topic: "Günlük Hayat", // 'Karışık' | 'Günlük Hayat' | 'İş/Profesyonel' | 'Teknik/Yazılım' | 'Seyahat & Sosyal' | 'Akademik & Tartışma'
-            count: 5 // 5 | 10
+            sourcePool: savedSp.sourcePool || "learning", // 'random_all' | 'learning' | 'mistakes' | 'mastered'
+            cefrLevel: savedSp.cefrLevel || profile?.cefrLevel || "B1", // 'MIXED' | 'A1' | 'A2' | 'B1' | 'B2' | 'C1'
+            topic: savedSp.topic || "Günlük Hayat",
+            count: savedSp.count || 5 // 5 | 10
         };
 
         const drawSetup = () => {
@@ -2896,6 +2950,7 @@ class UIController {
                     let val = btn.getAttribute("data-val");
                     if (grp === "count") val = parseInt(val, 10);
                     setupState[grp] = val;
+                    window.dbManager.saveProfilePrefs({ sentencePracticeConfig: { ...setupState } }).catch(() => {});
                     drawSetup();
                 });
             });
@@ -3197,24 +3252,35 @@ class UIController {
         this.setMobileFocusMode(false);
         const container = document.getElementById("vocab-test-container");
         const allVocab = await window.dbManager.getAll("vocabulary");
+        const nonMasteredVocab = allVocab.filter(v => v.status !== "mastered");
+        const prefs = await window.dbManager.getProfilePrefs();
+        const savedVc = prefs.vocabTestConfig || {};
 
         const counts = {
-            all: allVocab.length,
-            learning: allVocab.filter(v => v.status === "learning" || v.status === "review").length,
-            mistakes: allVocab.filter(v => (v.mistakeCount || 0) > 0).length,
-            new: allVocab.filter(v => v.status === "new").length,
+            activeAll: nonMasteredVocab.length,
+            learning: nonMasteredVocab.filter(v => v.status === "learning" || v.status === "review").length,
+            mistakes: nonMasteredVocab.filter(v => (v.mistakeCount || 0) > 0).length,
+            new: nonMasteredVocab.filter(v => v.status === "new").length,
             mastered: allVocab.filter(v => v.status === "mastered").length,
-            word: allVocab.filter(v => this.classifyVocabItemType(v) === "word").length,
-            phrasal: allVocab.filter(v => this.classifyVocabItemType(v) === "phrasal").length,
-            connector: allVocab.filter(v => this.classifyVocabItemType(v) === "connector").length
+            word: nonMasteredVocab.filter(v => this.classifyVocabItemType(v) === "word").length,
+            phrasal: nonMasteredVocab.filter(v => this.classifyVocabItemType(v) === "phrasal").length,
+            connector: nonMasteredVocab.filter(v => this.classifyVocabItemType(v) === "connector").length
         };
 
+        // Geriye dönük uyumluluk: eski tekil cefrMode varsa diziye çevir
+        let initialCefrModes = ["ALL"];
+        if (Array.isArray(savedVc.cefrModes) && savedVc.cefrModes.length > 0) {
+            initialCefrModes = [...savedVc.cefrModes];
+        } else if (savedVc.cefrMode && savedVc.cefrMode !== "ALL") {
+            initialCefrModes = [savedVc.cefrMode];
+        }
+
         const testConfig = {
-            poolMode: "random_all", // 'random_all' | 'learning' | 'mistakes' | 'new' | 'mastered'
-            categoryMode: "all", // 'all' | 'word' | 'phrasal' | 'connector'
-            cefrMode: "ALL", // 'ALL' | 'A1' | 'A2' | 'B1' | 'B2' | 'C1'
-            questionTypeMode: "mixed", // 'mixed' | 'write_only' | 'mc_only'
-            questionCount: 10 // 10 | 20 | 30
+            poolMode: savedVc.poolMode || "random_all", // 'random_all' | 'learning' | 'mistakes' | 'new' | 'mastered'
+            categoryMode: savedVc.categoryMode || "all", // 'all' | 'word' | 'phrasal' | 'connector'
+            cefrModes: initialCefrModes, // ['ALL'] veya ['A1', 'A2', ...] çoklu seçim
+            questionTypeMode: savedVc.questionTypeMode || "mixed", // 'mixed' | 'write_only' | 'mc_only'
+            questionCount: savedVc.questionCount || 10 // 10 | 20 | 30
         };
 
         const drawTestSetup = () => {
@@ -3222,14 +3288,14 @@ class UIController {
                 <div class="glass-panel practice-setup-card">
                     <span class="quest-day-tag">ÖZEL KELİME & KALIP TESTİ</span>
                     <h2>🎯 Kelime & Kalıp Havuzundan Test — Hangi Alanda Çalışmak İstersin?</h2>
-                    <p class="text-muted">Teste başlamadan önce hangi statüdeki kelimelerden, hangi kategoriden ve nasıl (şıklı / yazmalı) soru çözmek istediğinizi seçin:</p>
+                    <p class="text-muted">Tüm seçimlerin profiline otomatik kaydedilir. Ustalaştığın kelimeler (özellikle seçmedikçe) testlerde karşına çıkmaz:</p>
 
                     <div class="setup-section-block">
                         <h4>1. Çalışmak İstediğiniz Havuz / Durum</h4>
                         <div class="setup-choice-grid" data-tgroup="poolMode">
                             <button type="button" class="setup-choice-tile ${testConfig.poolMode === "random_all" ? "active" : ""}" data-val="random_all">
-                                <strong><span>🎲 Hepsinden Rastgele</span> <span class="tag-badge">${counts.all}</span></strong>
-                                <small>Tüm kelime, phrasal verb ve bağlaç havuzundan karışık sorar</small>
+                                <strong><span>🎲 Hepsinden Rastgele</span> <span class="tag-badge">${counts.activeAll}</span></strong>
+                                <small>Ustalaşılanlar hariç tüm aktif havuzdan karışık sorar</small>
                             </button>
                             <button type="button" class="setup-choice-tile ${testConfig.poolMode === "learning" ? "active" : ""}" data-val="learning">
                                 <strong><span>🌱 Öğreniliyor & Tekrar</span> <span class="tag-badge tag-status-learning">${counts.learning}</span></strong>
@@ -3245,7 +3311,7 @@ class UIController {
                             </button>
                             <button type="button" class="setup-choice-tile ${testConfig.poolMode === "mastered" ? "active" : ""}" data-val="mastered">
                                 <strong><span>👑 Ustalaşılanlar</span> <span class="tag-badge tag-status-mastered">${counts.mastered}</span></strong>
-                                <small>Ustalaştığın kelimelerin yan anlamlarını yokla</small>
+                                <small>Ustalaştığın kelimeleri tekrar yoklamak istersen seç</small>
                             </button>
                         </div>
                     </div>
@@ -3253,7 +3319,7 @@ class UIController {
                     <div class="setup-section-block">
                         <h4>2. Tür Seçimi (Kelime / Phrasal Verb / Bağlaç)</h4>
                         <div class="scenario-pills" data-tgroup="categoryMode">
-                            <button type="button" class="scenario-pill ${testConfig.categoryMode === "all" ? "active" : ""}" data-val="all">📚 Tümü (${counts.all})</button>
+                            <button type="button" class="scenario-pill ${testConfig.categoryMode === "all" ? "active" : ""}" data-val="all">📚 Tümü (${counts.activeAll})</button>
                             <button type="button" class="scenario-pill ${testConfig.categoryMode === "word" ? "active" : ""}" data-val="word">📘 Sadece Kelimeler (${counts.word})</button>
                             <button type="button" class="scenario-pill ${testConfig.categoryMode === "phrasal" ? "active" : ""}" data-val="phrasal">🚀 Sadece Phrasal Verbler (${counts.phrasal})</button>
                             <button type="button" class="scenario-pill ${testConfig.categoryMode === "connector" ? "active" : ""}" data-val="connector">🔗 Sadece Bağlaçlar & Kalıplar (${counts.connector})</button>
@@ -3261,13 +3327,16 @@ class UIController {
                     </div>
 
                     <div class="setup-section-block">
-                        <h4>3. Seviye Filtresi (CEFR)</h4>
-                        <div class="scenario-pills" data-tgroup="cefrMode">
-                            ${["ALL", "A1", "A2", "B1", "B2", "C1"].map(lvl => `
-                                <button type="button" class="scenario-pill ${testConfig.cefrMode === lvl ? "active" : ""}" data-val="${lvl}">
-                                    ${lvl === "ALL" ? "🔀 Tüm Seviyeler" : lvl}
+                        <h4>3. Seviye Filtresi (CEFR — Birden Fazla Seçebilirsiniz)</h4>
+                        <div class="scenario-pills" data-tgroup="cefrModes">
+                            ${["ALL", "A1", "A2", "B1", "B2", "C1"].map(lvl => {
+                                const isActive = testConfig.cefrModes.includes(lvl);
+                                return `
+                                <button type="button" class="scenario-pill ${isActive ? "active" : ""}" data-val="${lvl}">
+                                    ${lvl === "ALL" ? "🔀 Tüm Seviyeler" : (isActive ? `✓ ${lvl}` : lvl)}
                                 </button>
-                            `).join("")}
+                                `;
+                            }).join("")}
                         </div>
                     </div>
 
@@ -3301,8 +3370,30 @@ class UIController {
                 btn.addEventListener("click", () => {
                     const grp = btn.closest("[data-tgroup]").getAttribute("data-tgroup");
                     let val = btn.getAttribute("data-val");
-                    if (grp === "questionCount") val = parseInt(val, 10);
-                    testConfig[grp] = val;
+
+                    if (grp === "cefrModes") {
+                        if (val === "ALL") {
+                            testConfig.cefrModes = ["ALL"];
+                        } else {
+                            let next = testConfig.cefrModes.filter(x => x !== "ALL");
+                            if (next.includes(val)) {
+                                next = next.filter(x => x !== val);
+                            } else {
+                                next.push(val);
+                            }
+                            testConfig.cefrModes = next.length > 0 ? next : ["ALL"];
+                        }
+                    } else {
+                        if (grp === "questionCount") val = parseInt(val, 10);
+                        testConfig[grp] = val;
+                    }
+
+                    window.dbManager.saveProfilePrefs({
+                        vocabTestConfig: {
+                            ...testConfig,
+                            cefrModes: [...testConfig.cefrModes]
+                        }
+                    }).catch(() => {});
                     drawTestSetup();
                 });
             });
@@ -3322,12 +3413,23 @@ class UIController {
 
         let pool = [...allVocab];
 
+        // Ustalaşılan kelimeler yalnızca açıkça "👑 Ustalaşılanlar" seçildiyse gösterilir
+        if (testConfig.poolMode === "mastered") {
+            pool = pool.filter(v => v.status === "mastered");
+        } else {
+            pool = pool.filter(v => v.status !== "mastered");
+        }
+
         if (testConfig.categoryMode !== "all") {
             pool = pool.filter(v => this.classifyVocabItemType(v) === testConfig.categoryMode);
         }
 
-        if (testConfig.cefrMode !== "ALL") {
-            pool = pool.filter(v => v.cefr === testConfig.cefrMode);
+        const cefrList = Array.isArray(testConfig.cefrModes) && testConfig.cefrModes.length > 0
+            ? testConfig.cefrModes
+            : (testConfig.cefrMode && testConfig.cefrMode !== "ALL" ? [testConfig.cefrMode] : ["ALL"]);
+
+        if (!cefrList.includes("ALL")) {
+            pool = pool.filter(v => cefrList.includes(v.cefr));
         }
 
         if (testConfig.poolMode === "learning") {
@@ -3336,8 +3438,6 @@ class UIController {
             pool = pool.filter(v => (v.mistakeCount || 0) > 0).sort((a, b) => (b.mistakeCount || 0) - (a.mistakeCount || 0));
         } else if (testConfig.poolMode === "new") {
             pool = pool.filter(v => v.status === "new");
-        } else if (testConfig.poolMode === "mastered") {
-            pool = pool.filter(v => v.status === "mastered");
         }
 
         if (pool.length === 0) {
@@ -3390,6 +3490,7 @@ class UIController {
                             </div>
                             <span class="focus-quiz-counter">${qIdx + 1} / ${questions.length}</span>
                         </div>
+                        <button type="button" class="btn btn-warning btn-sm focus-master-btn" id="btn-custom-quiz-master" title="Bu kelimede ustalaştım — bir daha testlerde gösterme">👑 Ustalaş</button>
                         <span class="tag-badge tag-cefr focus-quiz-type-pill">${q.type === "WRITE_EN" ? "⌨️ Yaz" : (q.type === "EN_TO_TR" ? "🇬🇧➔🇹🇷" : "🇹🇷➔🇬🇧")}</span>
                     </div>
 
@@ -3406,6 +3507,12 @@ class UIController {
 
             document.getElementById("btn-back-vocab-test-setup").addEventListener("click", () => {
                 this.renderVocabTestSetup();
+            });
+
+            document.getElementById("btn-custom-quiz-master")?.addEventListener("click", async () => {
+                await window.dbManager.updateWordSRS(q.termObj.id, "mastered");
+                this.showToast(`👑 "${q.termObj.term}" ustalaşıldı! Artık testlerde gösterilmeyecek.`);
+                advanceStep();
             });
 
             this.mountVocabQuestionBox(document.getElementById("custom-quiz-box"), q, {

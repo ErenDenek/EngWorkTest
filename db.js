@@ -868,6 +868,26 @@ class DatabaseManager {
         return found || "";
     }
 
+    async getProfilePrefs() {
+        const profile = await this.get("settings", "profile");
+        return (profile && typeof profile.prefs === "object" && profile.prefs) ? { ...profile.prefs } : {};
+    }
+
+    async saveProfilePrefs(partialPrefs) {
+        if (!partialPrefs || typeof partialPrefs !== "object") return {};
+        const profile = await this.get("settings", "profile");
+        if (!profile) return {};
+        const nextPrefs = {
+            ...(profile.prefs || {}),
+            ...partialPrefs
+        };
+        profile.prefs = nextPrefs;
+        profile.prefsUpdatedAt = new Date().toISOString();
+        await this.put("settings", profile);
+        this.scheduleCloudSync();
+        return nextPrefs;
+    }
+
     async getCloudConfig() {
         const appCfg = this.getAppConfig();
         const dbCfg = await this.get("settings", "cloudConfig");
@@ -1230,20 +1250,29 @@ class DatabaseManager {
                         bestStreak = Math.max(lp.streak || 0, rp.streak || 0);
                     }
 
+                    const localPrefsTs = lp.prefsUpdatedAt || "";
+                    const remotePrefsTs = rp.prefsUpdatedAt || payload.savedAt || "";
+                    const remotePrefsNewer = Boolean(remotePrefsTs && remotePrefsTs > localPrefsTs);
+                    const mergedPrefs = remotePrefsNewer
+                        ? { ...(lp.prefs || {}), ...(rp.prefs || {}) }
+                        : { ...(rp.prefs || {}), ...(lp.prefs || {}) };
+
                     await this.put("settings", {
                         ...lp,
                         username: activeUsername,
                         xp: maxXp,
                         level: Math.floor(maxXp / 250) + 1,
                         currentDay: Math.max(lp.currentDay || 1, rp.currentDay || 1),
-                        cefrLevel: rp.cefrLevel || lp.cefrLevel || "B1",
+                        cefrLevel: remotePrefsNewer ? (rp.cefrLevel || lp.cefrLevel || "B1") : (lp.cefrLevel || rp.cefrLevel || "B1"),
                         totalSentencesTranslated: Math.max(lp.totalSentencesTranslated || 0, rp.totalSentencesTranslated || 0),
                         accuracySum: Math.max(lp.accuracySum || 0, rp.accuracySum || 0),
                         completedDaysCount: Math.max(lp.completedDaysCount || 0, rp.completedDaysCount || 0, completedDays),
                         streak: bestStreak,
                         lastActiveDate: bestLastDate,
-                        avatar: lp.avatar || rp.avatar || "🧙‍♂️",
-                        theme: lp.theme || rp.theme || "dark"
+                        avatar: remotePrefsNewer ? (rp.avatar || lp.avatar || "🧙‍♂️") : (lp.avatar || rp.avatar || "🧙‍♂️"),
+                        theme: remotePrefsNewer ? (rp.theme || lp.theme || "dark") : (lp.theme || rp.theme || "dark"),
+                        prefs: mergedPrefs,
+                        prefsUpdatedAt: remotePrefsNewer ? remotePrefsTs : (localPrefsTs || remotePrefsTs)
                     });
                 }
             }
