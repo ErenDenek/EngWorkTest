@@ -2198,7 +2198,7 @@ class UIController {
     }
 
     // =========================================================================
-    // 5. DETAYLI İSTATİSTİK & KARAKTER DASHBOARD + AKTİVİTE ISI HARİTASI
+    // 5. DETAYLI İSTATİSTİK & KARAKTER DASHBOARD + 14 GÜNLÜK TREND + ISI HARİTASI
     // =========================================================================
     async renderStatsDashboard() {
         const profile = await window.dbManager.get("settings", "profile");
@@ -2206,7 +2206,12 @@ class UIController {
         const activities = await window.dbManager.getAll("activity");
         const mistakes = await window.dbManager.getAll("mistakes");
 
-        // Karakter Bilgileri
+        const todayDate = new Date();
+        const todayIso = todayDate.toISOString().split("T")[0];
+        const actMap = new Map(activities.map(a => [a.date, a]));
+        const todayRec = actMap.get(todayIso) || {};
+
+        // 1. Karakter Bilgileri
         const lvl = profile?.level || 1;
         const xp = profile?.xp || 0;
         const xpInLevel = xp % 250;
@@ -2219,15 +2224,170 @@ class UIController {
         document.getElementById("stats-xp-bar").style.width = `${pct}%`;
         document.getElementById("stats-xp-text").textContent = `${xpInLevel} / 250 XP sonraki seviyeye (Toplam: ${xp} XP)`;
 
-        // Üretim Metrikleri
+        // 2. Bugünün Canlı Özeti
+        const todayWords = Math.max(
+            todayRec.wordsStudied || 0,
+            Array.isArray(todayRec.wordIdsStudied) ? todayRec.wordIdsStudied.length : 0
+        );
+        const todayQuizQ = todayRec.quizAnswersCount || 0;
+        const todaySentences = todayRec.sentencesCount || 0;
+        const todayMastered = todayRec.masteredToday || 0;
+        const todayXp = todayRec.xpEarned || 0;
+
+        const todayDateLabel = todayDate.toLocaleDateString("tr-TR", { day: "numeric", month: "short", weekday: "short" });
+        const todayBadgeEl = document.getElementById("stats-today-date");
+        if (todayBadgeEl) todayBadgeEl.textContent = todayDateLabel;
+        const setTxt = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+        setTxt("today-words-count", todayWords);
+        setTxt("today-quiz-q-count", todayQuizQ);
+        setTxt("today-sentences-count", todaySentences);
+        setTxt("today-mastered-count", `+${todayMastered}`);
+        setTxt("today-xp-count", `+${todayXp} XP`);
+
+        // 3. Kapsamlı Kelime & Cümle Analiz Metrikleri
+        const totalVocabCorrect = vocab.reduce((s, v) => s + (v.correctCount || 0), 0);
+        const totalVocabWrong = vocab.reduce((s, v) => s + (v.mistakeCount || 0), 0);
+        const totalQuizAnswers = totalVocabCorrect + totalVocabWrong;
+        const vocabQuizAcc = totalQuizAnswers > 0 ? Math.round((totalVocabCorrect / totalQuizAnswers) * 100) : 0;
+
+        const studiedWordsCount = vocab.filter(v =>
+            (v.status && v.status !== "new") || (v.correctCount || 0) > 0 || (v.mistakeCount || 0) > 0
+        ).length;
+        const vocabCoveragePct = vocab.length > 0 ? Math.round((studiedWordsCount / vocab.length) * 100) : 0;
+
+        const activeDaysList = activities.filter(a =>
+            (a.xpEarned || 0) > 0 || (a.wordsStudied || 0) > 0 || (a.sentencesCount || 0) > 0 || (a.quizAnswersCount || 0) > 0
+        );
+        const activeDaysCount = Math.max(activeDaysList.length, (studiedWordsCount > 0 || (profile?.totalSentencesTranslated || 0) > 0) ? 1 : 0);
+
+        const sumDailyWords = activeDaysList.reduce((s, a) => s + Math.max(a.wordsStudied || 0, Array.isArray(a.wordIdsStudied) ? a.wordIdsStudied.length : 0), 0);
+        const sumDailyQuestions = activeDaysList.reduce((s, a) => s + (a.quizAnswersCount || 0), 0);
+        const effectiveTotalWordsForAvg = Math.max(sumDailyWords, studiedWordsCount);
+        const effectiveTotalQuestionsForAvg = Math.max(sumDailyQuestions, totalQuizAnswers);
+
+        const dailyAvgWords = activeDaysCount > 0 ? (effectiveTotalWordsForAvg / activeDaysCount).toFixed(1) : "0";
+        const dailyAvgQuestions = activeDaysCount > 0 ? (effectiveTotalQuestionsForAvg / activeDaysCount).toFixed(1) : "0";
+
+        const sumTestsFromAct = activities.reduce((s, a) => s + (a.vocabTestsCompleted || 0), 0);
+        const totalVocabTests = Math.max(profile?.totalVocabTestsCompleted || 0, sumTestsFromAct);
+
         const totalSent = profile?.totalSentencesTranslated || 0;
         const avgAcc = totalSent > 0 ? Math.round((profile.accuracySum || 0) / totalSent) : 0;
-        document.getElementById("stat-total-sentences").textContent = totalSent;
-        document.getElementById("stat-avg-accuracy").textContent = `%${avgAcc}`;
-        document.getElementById("stat-completed-days").textContent = profile?.completedDaysCount || 0;
-        document.getElementById("stat-active-streak").textContent = `${profile?.streak || 0} Gün`;
+        const dailyAvgSentences = activeDaysCount > 0 ? (totalSent / activeDaysCount).toFixed(1) : "0";
+        const totalSentSessions = Math.max(
+            profile?.totalSentenceSessionsCompleted || 0,
+            activities.reduce((s, a) => s + (a.sentenceSessionsCompleted || 0), 0)
+        );
+        const bestStreak = Math.max(profile?.bestStreak || 0, profile?.streak || 0);
 
-        // Kelime Havuzu Dağılım Grafiği
+        setTxt("stat-total-vocab-tests", `${totalVocabTests} Test`);
+        setTxt("stat-total-quiz-answers", `${totalQuizAnswers} toplam soru çözüldü`);
+        setTxt("stat-total-words-studied", `${studiedWordsCount} / ${vocab.length}`);
+        setTxt("stat-words-coverage", `Havuzun %${vocabCoveragePct}'i çalışıldı`);
+        setTxt("stat-daily-avg-words", `${dailyAvgWords}`);
+        setTxt("stat-daily-avg-questions", `Ort. ${dailyAvgQuestions} soru / aktif gün`);
+        setTxt("stat-vocab-quiz-acc", `%${vocabQuizAcc}`);
+        setTxt("stat-vocab-correct-wrong", `${totalVocabCorrect} doğru • ${totalVocabWrong} yanlış`);
+        setTxt("stat-total-sentences", totalSent);
+        setTxt("stat-daily-avg-sentences", `Ort. ${dailyAvgSentences} cümle / aktif gün`);
+        setTxt("stat-avg-accuracy", `%${avgAcc}`);
+        setTxt("stat-sentence-sessions", `${totalSentSessions} cümle oturumu`);
+        setTxt("stat-active-streak", `${profile?.streak || 0} Gün`);
+        setTxt("stat-best-streak", `En iyi rekor: ${bestStreak} Gün`);
+        setTxt("stat-active-days-count", `${activeDaysCount} Gün`);
+        setTxt("stat-completed-days-sub", `${profile?.completedDaysCount || 0} harita günü tamamlandı`);
+
+        // 4. Son 14 Günlük Çalışma Trend Grafiği (Kelime / Cümle / XP)
+        const last14 = [];
+        for (let i = 13; i >= 0; i--) {
+            const d = new Date(todayDate);
+            d.setDate(todayDate.getDate() - i);
+            const iso = d.toISOString().split("T")[0];
+            const rec = actMap.get(iso) || {};
+            const wCount = Math.max(rec.wordsStudied || 0, Array.isArray(rec.wordIdsStudied) ? rec.wordIdsStudied.length : 0);
+            last14.push({
+                iso,
+                label: d.toLocaleDateString("tr-TR", { day: "numeric", month: "short" }),
+                isToday: i === 0,
+                words: wCount,
+                sentences: rec.sentencesCount || 0,
+                xp: rec.xpEarned || 0
+            });
+        }
+
+        const renderTrendChart = (metric = "words") => {
+            const chartEl = document.getElementById("stats-14day-chart");
+            const subEl = document.getElementById("trend-summary-subtitle");
+            if (!chartEl) return;
+
+            const vals = last14.map(d => d[metric]);
+            const maxVal = Math.max(...vals, 1);
+            const sum14 = vals.reduce((a, b) => a + b, 0);
+            const sum7 = vals.slice(-7).reduce((a, b) => a + b, 0);
+            const avg7 = (sum7 / 7).toFixed(1);
+            const unitLabel = metric === "words" ? "kelime" : (metric === "sentences" ? "cümle" : "XP");
+            const barColor = metric === "words" ? "var(--accent-primary)" : (metric === "sentences" ? "var(--accent-secondary)" : "var(--accent-warning)");
+
+            if (subEl) {
+                subEl.innerHTML = `Son 7 gün: <strong>${sum7} ${unitLabel}</strong> (günlük ort. <strong>${avg7}</strong>) • Son 14 gün: <strong>${sum14} ${unitLabel}</strong>`;
+            }
+
+            chartEl.innerHTML = last14.map(d => {
+                const v = d[metric];
+                const hPct = v > 0 ? Math.max(8, Math.round((v / maxVal) * 100)) : 3;
+                return `
+                    <div class="trend-bar-col ${d.isToday ? "is-today" : ""}" title="${d.iso}: ${v} ${unitLabel}">
+                        <span class="trend-bar-val">${v > 0 ? v : ""}</span>
+                        <div class="trend-bar-track">
+                            <div class="trend-bar-fill" style="height:${hPct}%;background:${v > 0 ? barColor : "var(--border-color)"};"></div>
+                        </div>
+                        <span class="trend-bar-date">${d.isToday ? "Bugün" : d.label}</span>
+                    </div>
+                `;
+            }).join("");
+        };
+
+        const trendTabs = document.getElementById("stats-trend-tabs");
+        if (trendTabs) {
+            trendTabs.querySelectorAll("[data-trend]").forEach(btn => {
+                btn.onclick = () => {
+                    trendTabs.querySelectorAll("[data-trend]").forEach(b => b.classList.remove("active"));
+                    btn.classList.add("active");
+                    renderTrendChart(btn.getAttribute("data-trend"));
+                };
+            });
+            const activeTab = trendTabs.querySelector(".scenario-pill.active")?.getAttribute("data-trend") || "words";
+            renderTrendChart(activeTab);
+        }
+
+        // 5. Seviye Bazlı İlerleme (A1 – C1)
+        const cefrEl = document.getElementById("stats-cefr-breakdown");
+        if (cefrEl) {
+            const levels = ["A1", "A2", "B1", "B2", "C1"];
+            cefrEl.innerHTML = levels.map(lv => {
+                const items = vocab.filter(v => (v.cefr || "B1") === lv);
+                const totalL = items.length;
+                const masteredL = items.filter(v => v.status === "mastered").length;
+                const learningL = items.filter(v => v.status === "learning" || v.status === "review").length;
+                const mPct = totalL > 0 ? Math.round((masteredL / totalL) * 100) : 0;
+                const lPct = totalL > 0 ? Math.round((learningL / totalL) * 100) : 0;
+                return `
+                    <div class="dist-bar-row">
+                        <div class="dist-bar-label">
+                            <span><strong>${lv}</strong> <small class="text-muted">(${masteredL} ustalaşıldı • ${learningL} çalışılıyor / ${totalL})</small></span>
+                            <span><strong>%${mPct}</strong></span>
+                        </div>
+                        <div class="dist-bar-track" style="display:flex;">
+                            <div class="dist-bar-fill" style="width:${mPct}%;background:#10b981;border-radius:0;"></div>
+                            <div class="dist-bar-fill" style="width:${lPct}%;background:#f59e0b;border-radius:0;"></div>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        // 6. Kelime Havuzu & Kategori Dağılımı
         const totalV = vocab.length || 1;
         const counts = {
             new: vocab.filter(v => v.status === "new").length,
@@ -2235,17 +2395,20 @@ class UIController {
             review: vocab.filter(v => v.status === "review").length,
             mastered: vocab.filter(v => v.status === "mastered").length
         };
+        const catWord = vocab.filter(v => this.classifyVocabItemType(v) === "word");
+        const catPhrasal = vocab.filter(v => this.classifyVocabItemType(v) === "phrasal");
+        const catConn = vocab.filter(v => this.classifyVocabItemType(v) === "connector");
 
         const distChart = document.getElementById("vocab-distribution-chart");
         const rows = [
-            { label: "🆕 Yeni (New)", count: counts.new, color: "#06b6d4" },
+            { label: "👑 Ustalaşılan (Mastered)", count: counts.mastered, color: "#10b981" },
             { label: "🌱 Öğreniliyor (3-7-21 Gün SRS)", count: counts.learning, color: "#f59e0b" },
             { label: "🔄 Tekrar Bekleyen (Review)", count: counts.review, color: "#ef4444" },
-            { label: "👑 Ustalaşılan (Mastered)", count: counts.mastered, color: "#10b981" }
+            { label: "🆕 Yeni (New)", count: counts.new, color: "#06b6d4" }
         ];
 
         distChart.innerHTML = `
-            <p class="text-muted" style="margin-bottom:0.85rem;">Toplam Havuz: <strong>${vocab.length}</strong> Kelime & Kalıp</p>
+            <p class="text-muted" style="margin-bottom:0.85rem;">Toplam Havuz: <strong>${vocab.length}</strong> Kelime &amp; Kalıp</p>
             ${rows.map(r => {
             const wPct = Math.round((r.count / totalV) * 100);
             return `
@@ -2260,30 +2423,66 @@ class UIController {
                     </div>
                 `;
         }).join("")}
+            <div class="category-mini-summary">
+                <span>📘 Kelime: <strong>${catWord.filter(v => v.status === "mastered").length}/${catWord.length}</strong></span>
+                <span>🚀 Phrasal: <strong>${catPhrasal.filter(v => v.status === "mastered").length}/${catPhrasal.length}</strong></span>
+                <span>🔗 Bağlaç: <strong>${catConn.filter(v => v.status === "mastered").length}/${catConn.length}</strong></span>
+            </div>
         `;
 
-        // GitHub Tarzı Son 12 Haftalık (84 Gün) Aktivite Isı Haritası
-        const actMap = new Map(activities.map(a => [a.date, a]));
+        // 7. GitHub Tarzı Son 12 Haftalık (84 Gün) Aktivite Isı Haritası
         const heatmapEl = document.getElementById("activity-heatmap");
-        const today = new Date();
         let colsHtml = "";
-
         for (let col = 11; col >= 0; col--) {
             let boxesHtml = "";
             for (let row = 6; row >= 0; row--) {
-                const d = new Date(today);
-                d.setDate(today.getDate() - (col * 7 + row));
+                const d = new Date(todayDate);
+                d.setDate(todayDate.getDate() - (col * 7 + row));
                 const iso = d.toISOString().split("T")[0];
                 const rec = actMap.get(iso);
                 const xpVal = rec?.xpEarned || 0;
-                const lvlClass = xpVal === 0 ? "lvl-0" : (xpVal < 40 ? "lvl-1" : (xpVal < 90 ? "lvl-2" : (xpVal < 160 ? "lvl-3" : "lvl-4")));
-                boxesHtml += `<div class="heat-box ${lvlClass}" title="${iso}: ${xpVal} XP, ${rec?.sentencesCount || 0} cümle"></div>`;
+                const wVal = Math.max(rec?.wordsStudied || 0, Array.isArray(rec?.wordIdsStudied) ? rec.wordIdsStudied.length : 0);
+                const sVal = rec?.sentencesCount || 0;
+                const intensity = xpVal + wVal * 5 + sVal * 15;
+                const lvlClass = intensity === 0 ? "lvl-0" : (intensity < 40 ? "lvl-1" : (intensity < 100 ? "lvl-2" : (intensity < 180 ? "lvl-3" : "lvl-4")));
+                boxesHtml += `<div class="heat-box ${lvlClass}" title="${iso}: ${wVal} kelime, ${sVal} cümle, ${xpVal} XP"></div>`;
             }
             colsHtml += `<div class="heatmap-col">${boxesHtml}</div>`;
         }
         heatmapEl.innerHTML = colsHtml;
 
-        // Zayıf Noktalar (Hata Kumbarası)
+        // 8. Testlerde En Çok Zorlanılan Kelimeler (Top 6)
+        const hardestEl = document.getElementById("stats-hardest-words-list");
+        if (hardestEl) {
+            const hardest = vocab
+                .filter(v => (v.mistakeCount || 0) > 0 && v.status !== "mastered")
+                .sort((a, b) => (b.mistakeCount || 0) - (a.mistakeCount || 0))
+                .slice(0, 6);
+
+            if (hardest.length === 0) {
+                hardestEl.innerHTML = `<p class="text-muted">Harika gidiyorsun! Testlerde sık yanlış yaptığın bir kelime bulunmuyor.</p>`;
+            } else {
+                hardestEl.innerHTML = `<div class="hardest-words-grid">` + hardest.map(w => {
+                    const tot = (w.correctCount || 0) + (w.mistakeCount || 0);
+                    const acc = tot > 0 ? Math.round(((w.correctCount || 0) / tot) * 100) : 0;
+                    return `
+                        <div class="hardest-word-row">
+                            <div>
+                                <strong style="color:var(--accent-primary);">${w.term}</strong>
+                                <span class="tag-badge tag-cefr" style="margin-left:0.3rem;">${w.cefr || "B1"}</span>
+                                <div class="text-muted" style="font-size:0.78rem;">${w.meanings?.[0]?.tr || ""}</div>
+                            </div>
+                            <div style="text-align:right;">
+                                <span class="tag-badge tag-status-review">${w.mistakeCount} yanlış</span>
+                                <div class="text-muted" style="font-size:0.75rem;">Başarı: %${acc}</div>
+                            </div>
+                        </div>
+                    `;
+                }).join("") + `</div>`;
+            }
+        }
+
+        // 9. Zayıf Noktalar (Cümle Hata Kumbarası)
         const mistakeContainer = document.getElementById("mistake-list-container");
         if (mistakes.length === 0) {
             mistakeContainer.innerHTML = `<p class="text-muted">Harika! Şu anda Hata Kumbaranızda bekleyen zayıf kelime veya kalıp bulunmuyor.</p>`;
@@ -3232,7 +3431,7 @@ class UIController {
             if (finBtn) {
                 finBtn.addEventListener("click", async () => {
                     if (!passedCurrent) return;
-                    await window.dbManager.logDailyActivity(50, 0, null);
+                    await window.dbManager.logDailyActivity(50, 0, null, { sentenceSessionCompleted: true });
                     await this.updateHUD();
                     this.launchConfetti();
                     this.showToast("🎉 Serbest Cümle Pratiği başarıyla tamamlandı! (+50 XP)");
@@ -3472,7 +3671,7 @@ class UIController {
                     qIdx++;
                     renderQ();
                 } else {
-                    await window.dbManager.logDailyActivity(35, 0, null);
+                    await window.dbManager.logDailyActivity(35, 0, null, { vocabTestCompleted: true });
                     await this.updateHUD();
                     this.launchConfetti();
                     this.showToast(`🎉 Test tamamlandı! (${correctTotal}/${questions.length} ilk denemede doğru • +35 XP)`);

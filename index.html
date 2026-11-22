@@ -19,7 +19,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap"
         rel="stylesheet">
-    <link rel="stylesheet" href="styles.css?v=1.5.3" />
+    <link rel="stylesheet" href="styles.css?v=1.6.0" />
 </head>
 
 <body>
@@ -234,10 +234,10 @@
             </div>
         </section>
 
-        <!-- 3. GÖRÜNÜM: KARAKTER İSTATİSTİK EKRANI, ISI HARİTASI VE HATA KUMBARASI -->
+        <!-- 3. GÖRÜNÜM: KARAKTER İSTATİSTİK & DETAYLI İLERLEME ANALİZ EKRANI -->
         <section id="stats-view" class="view-section">
+            <!-- Üst Satır: Karakter Kartı + Bugünkü Özet -->
             <div class="stats-top-grid">
-                <!-- Karakter Kartı -->
                 <div class="glass-panel character-sheet">
                     <div class="char-avatar-box">
                         <div class="char-avatar-large" id="stats-avatar">🧙‍♂️</div>
@@ -245,7 +245,7 @@
                     </div>
                     <div class="char-info">
                         <h2 id="stats-char-title">Çırak Dilgezgin</h2>
-                        <p class="text-muted">Aktif Cümle Üretimi & Çeviri Savaşçısı</p>
+                        <p class="text-muted">Aktif Cümle Üretimi &amp; Kelime Analiz Paneli</p>
                         <div class="xp-progress-bar">
                             <div class="xp-progress-fill" id="stats-xp-bar" style="width: 15%"></div>
                         </div>
@@ -253,54 +253,142 @@
                     </div>
                 </div>
 
-                <!-- Üretim Metrikleri -->
-                <div class="glass-panel metrics-cards">
-                    <div class="metric-item">
-                        <span class="metric-icon">✍️</span>
-                        <div>
-                            <h3 id="stat-total-sentences">0</h3>
-                            <p>Kurulan Toplam Cümle</p>
-                        </div>
+                <!-- Bugünün Canlı Özeti -->
+                <div class="glass-panel today-summary-panel">
+                    <div class="today-summary-header">
+                        <h3>⚡ Bugünkü Performansın</h3>
+                        <span class="tag-badge tag-cefr" id="stats-today-date">Bugün</span>
                     </div>
-                    <div class="metric-item">
-                        <span class="metric-icon">🎯</span>
-                        <div>
-                            <h3 id="stat-avg-accuracy">%0</h3>
-                            <p>Ortalama Çeviri Doğruluğu</p>
+                    <div class="today-mini-grid" id="stats-today-grid">
+                        <div class="today-mini-card">
+                            <strong id="today-words-count">0</strong>
+                            <span>Çalışılan Kelime</span>
                         </div>
-                    </div>
-                    <div class="metric-item">
-                        <span class="metric-icon">🏆</span>
-                        <div>
-                            <h3 id="stat-completed-days">0</h3>
-                            <p>Tamamlanan Gün</p>
+                        <div class="today-mini-card">
+                            <strong id="today-quiz-q-count">0</strong>
+                            <span>Çözülen Soru</span>
                         </div>
-                    </div>
-                    <div class="metric-item">
-                        <span class="metric-icon">🔥</span>
-                        <div>
-                            <h3 id="stat-active-streak">0 Gün</h3>
-                            <p>Aktif Seri (Streak)</p>
+                        <div class="today-mini-card">
+                            <strong id="today-sentences-count">0</strong>
+                            <span>Kurulan Cümle</span>
+                        </div>
+                        <div class="today-mini-card">
+                            <strong id="today-mastered-count">0</strong>
+                            <span>Ustalaşılan</span>
+                        </div>
+                        <div class="today-mini-card">
+                            <strong id="today-xp-count">+0 XP</strong>
+                            <span>Bugünkü XP</span>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <div class="stats-mid-grid">
-                <!-- Kelime Havuzu Dağılımı Grafiği -->
-                <div class="glass-panel distribution-panel">
-                    <h3>📊 Kelime Havuzu Dağılımı</h3>
-                    <div id="vocab-distribution-chart" class="dist-chart-area">
-                        <!-- JS ile bar ve halka dağılımı -->
+            <!-- 8'li Kapsamlı KPI Kartları (Kelime Testi, Ortalamalar, Cümleler, Seri) -->
+            <div class="analytics-kpi-grid">
+                <div class="glass-panel kpi-card">
+                    <span class="kpi-icon">🧪</span>
+                    <div class="kpi-body">
+                        <h3 id="stat-total-vocab-tests">0</h3>
+                        <p>Toplam Kelime Testi</p>
+                        <small id="stat-total-quiz-answers" class="text-muted">0 soru çözüldü</small>
                     </div>
                 </div>
+                <div class="glass-panel kpi-card">
+                    <span class="kpi-icon">📖</span>
+                    <div class="kpi-body">
+                        <h3 id="stat-total-words-studied">0</h3>
+                        <p>Çalışılan Benzersiz Kelime</p>
+                        <small id="stat-words-coverage" class="text-muted">Havuzun %0'ı</small>
+                    </div>
+                </div>
+                <div class="glass-panel kpi-card">
+                    <span class="kpi-icon">📈</span>
+                    <div class="kpi-body">
+                        <h3 id="stat-daily-avg-words">0</h3>
+                        <p>Günlük Ort. Kelime</p>
+                        <small id="stat-daily-avg-questions" class="text-muted">Ort. 0 soru / gün</small>
+                    </div>
+                </div>
+                <div class="glass-panel kpi-card">
+                    <span class="kpi-icon">🎯</span>
+                    <div class="kpi-body">
+                        <h3 id="stat-vocab-quiz-acc">%0</h3>
+                        <p>Kelime Testi Doğruluğu</p>
+                        <small id="stat-vocab-correct-wrong" class="text-muted">0 doğru • 0 yanlış</small>
+                    </div>
+                </div>
+                <div class="glass-panel kpi-card">
+                    <span class="kpi-icon">✍️</span>
+                    <div class="kpi-body">
+                        <h3 id="stat-total-sentences">0</h3>
+                        <p>Kurulan Toplam Cümle</p>
+                        <small id="stat-daily-avg-sentences" class="text-muted">Ort. 0 cümle / gün</small>
+                    </div>
+                </div>
+                <div class="glass-panel kpi-card">
+                    <span class="kpi-icon">🏅</span>
+                    <div class="kpi-body">
+                        <h3 id="stat-avg-accuracy">%0</h3>
+                        <p>Ort. Çeviri Puanı</p>
+                        <small id="stat-sentence-sessions" class="text-muted">0 cümle oturumu</small>
+                    </div>
+                </div>
+                <div class="glass-panel kpi-card">
+                    <span class="kpi-icon">🔥</span>
+                    <div class="kpi-body">
+                        <h3 id="stat-active-streak">0 Gün</h3>
+                        <p>Aktif Seri (Streak)</p>
+                        <small id="stat-best-streak" class="text-muted">Rekor: 0 Gün</small>
+                    </div>
+                </div>
+                <div class="glass-panel kpi-card">
+                    <span class="kpi-icon">📅</span>
+                    <div class="kpi-body">
+                        <h3 id="stat-active-days-count">0 Gün</h3>
+                        <p>Toplam Aktif Gün</p>
+                        <small id="stat-completed-days-sub" class="text-muted">0 harita günü bitti</small>
+                    </div>
+                </div>
+            </div>
 
-                <!-- Aktivite Isı Haritası (GitHub Katkı Grafiği Tarzı Heatmap) -->
+            <!-- Son 14 Günlük Çalışma Grafiği (Kelime / Cümle / XP) -->
+            <div class="glass-panel trend-chart-panel" style="margin-bottom:1.25rem;">
+                <div class="panel-header" style="margin-bottom:0.85rem;">
+                    <div>
+                        <h3>📊 Son 14 Günlük Çalışma Trendi</h3>
+                        <p class="text-muted" id="trend-summary-subtitle">Son 7 ve 14 günlük tempo analizi</p>
+                    </div>
+                    <div class="scenario-pills" id="stats-trend-tabs">
+                        <button type="button" class="scenario-pill active" data-trend="words">📚 Kelime</button>
+                        <button type="button" class="scenario-pill" data-trend="sentences">✍️ Cümle</button>
+                        <button type="button" class="scenario-pill" data-trend="xp">⚡ XP</button>
+                    </div>
+                </div>
+                <div id="stats-14day-chart" class="trend-bars-container"></div>
+            </div>
+
+            <!-- Seviye Bazlı (CEFR) + Havuz & Kategori Dağılımı -->
+            <div class="stats-mid-grid">
+                <div class="glass-panel">
+                    <h3>🎓 Seviye Bazlı İlerleme (A1 – C1)</h3>
+                    <p class="text-muted" style="margin-bottom:0.9rem;">Her CEFR seviyesindeki ustalaşma ve öğrenme oranın</p>
+                    <div id="stats-cefr-breakdown"></div>
+                </div>
+
+                <div class="glass-panel distribution-panel">
+                    <h3>📦 Kelime Havuzu &amp; Kategori Dağılımı</h3>
+                    <div id="vocab-distribution-chart" class="dist-chart-area"></div>
+                </div>
+            </div>
+
+            <!-- Aktivite Isı Haritası + Testlerde En Çok Zorlanılan Kelimeler -->
+            <div class="stats-mid-grid">
                 <div class="glass-panel heatmap-panel">
                     <div class="panel-header">
                         <div>
                             <h3>📅 Aktivite Isı Haritası (Son 12 Hafta)</h3>
-                            <p class="text-muted">Günlük çalışma yoğunluğu ve çeviri üretimi</p>
+                            <p class="text-muted">Günlük çalışma yoğunluğu (kelime + cümle + XP)</p>
                         </div>
                     </div>
                     <div id="activity-heatmap" class="heatmap-grid"></div>
@@ -314,23 +402,26 @@
                         <span>Çok</span>
                     </div>
                 </div>
+
+                <div class="glass-panel">
+                    <h3>🎯 Testlerde En Çok Zorlanılan Kelimeler</h3>
+                    <p class="text-muted" style="margin-bottom:0.85rem;">Kelime testlerinde en fazla yanlış işaretlediğin ifadeler</p>
+                    <div id="stats-hardest-words-list"></div>
+                </div>
             </div>
 
             <!-- Zayıf Noktalar: Hata Kumbarası (Mistake Bank) -->
             <div class="glass-panel mistake-bank-panel">
                 <div class="panel-header">
                     <div>
-                        <h3>⚠️ Zayıf Noktalar (Hata Kumbarası)</h3>
-                        <p class="text-muted">Aktif Çeviri Arenasında en sık hata yaptığın veya unuttuğun kelimeler ve
-                            kalıplar.</p>
+                        <h3>⚠️ Cümle Hata Kumbarası (Mistake Bank)</h3>
+                        <p class="text-muted">Aktif Çeviri Arenasında en sık hata yaptığın veya unuttuğun kelimeler ve kalıplar.</p>
                     </div>
                     <button class="btn btn-danger" id="btn-start-mistake-exam">
                         ⚔️ Hata Telafi Sınavı Başlat
                     </button>
                 </div>
-                <div id="mistake-list-container" class="mistake-list">
-                    <!-- JS ile hata yapılan kelimeler buraya listelenir -->
-                </div>
+                <div id="mistake-list-container" class="mistake-list"></div>
             </div>
         </section>
 
@@ -697,12 +788,12 @@
     <div id="toast-container"></div>
 
     <!-- Modüler Scriptler -->
-    <script src="cloudConfig.js?v=1.5.3"></script>
-    <script src="defaultWords.js?v=1.5.3"></script>
-    <script src="db.js?v=1.5.3"></script>
-    <script src="gemini.js?v=1.5.3"></script>
-    <script src="gameEngine.js?v=1.5.3"></script>
-    <script src="ui.js?v=1.5.3"></script>
+    <script src="cloudConfig.js?v=1.6.0"></script>
+    <script src="defaultWords.js?v=1.6.0"></script>
+    <script src="db.js?v=1.6.0"></script>
+    <script src="gemini.js?v=1.6.0"></script>
+    <script src="gameEngine.js?v=1.6.0"></script>
+    <script src="ui.js?v=1.6.0"></script>
     <script>
         if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
             window.addEventListener('load', () => {

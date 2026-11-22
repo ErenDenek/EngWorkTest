@@ -780,6 +780,175 @@ body {
     border-radius: 12px;
 }
 
+/* Detaylı İlerleme & Analiz Dashboard */
+.today-summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+}
+
+.today-mini-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.6rem;
+}
+@media (max-width: 900px) {
+    .today-mini-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+@media (max-width: 520px) {
+    .today-mini-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+.today-mini-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 0.7rem 0.6rem;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+}
+.today-mini-card strong {
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: var(--accent-primary);
+}
+.today-mini-card span {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.analytics-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.9rem;
+    margin-bottom: 1.25rem;
+}
+@media (max-width: 1024px) {
+    .analytics-kpi-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+@media (max-width: 520px) {
+    .analytics-kpi-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 0.65rem;
+    }
+}
+
+.kpi-card {
+    padding: 1rem 1.05rem;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+}
+.kpi-icon {
+    font-size: 1.75rem;
+    flex-shrink: 0;
+}
+.kpi-body {
+    min-width: 0;
+}
+.kpi-body h3 {
+    font-size: 1.25rem;
+    font-weight: 800;
+    line-height: 1.2;
+}
+.kpi-body p {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    margin-top: 0.1rem;
+}
+.kpi-body small {
+    font-size: 0.72rem;
+    display: block;
+}
+
+.trend-bars-container {
+    display: grid;
+    grid-template-columns: repeat(14, minmax(22px, 1fr));
+    gap: 0.4rem;
+    align-items: end;
+    height: 185px;
+    padding-top: 0.6rem;
+    overflow-x: auto;
+}
+.trend-bar-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    height: 100%;
+    gap: 0.25rem;
+}
+.trend-bar-val {
+    font-size: 0.7rem;
+    font-weight: 800;
+    color: var(--text-primary);
+    min-height: 1rem;
+}
+.trend-bar-track {
+    flex: 1;
+    width: 100%;
+    max-width: 28px;
+    background: var(--bg-elevated);
+    border-radius: 8px;
+    display: flex;
+    align-items: flex-end;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+.trend-bar-fill {
+    width: 100%;
+    border-radius: 6px 6px 0 0;
+    transition: height 0.3s ease;
+}
+.trend-bar-date {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.trend-bar-col.is-today .trend-bar-date {
+    color: var(--accent-primary);
+    font-weight: 800;
+}
+
+.category-mini-summary {
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px dashed var(--border-color);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.hardest-words-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+.hardest-word-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-color);
+    border-radius: 11px;
+    padding: 0.65rem 0.85rem;
+}
+
 /* 4. AYARLAR & BACKUP */
 .settings-grid {
     display: grid;

@@ -187,7 +187,7 @@ class GameEngine {
 
         day.updatedAt = new Date().toISOString();
         await window.dbManager.put("days", day);
-        await window.dbManager.logDailyActivity(30, 0, null);
+        await window.dbManager.logDailyActivity(30, 0, null, { vocabTestCompleted: true });
         window.dbManager.scheduleCloudSync();
         return day;
     }
@@ -243,7 +243,7 @@ class GameEngine {
         }
         day.updatedAt = new Date().toISOString();
         await window.dbManager.put("days", day);
-        await window.dbManager.logDailyActivity(50, 0, null);
+        await window.dbManager.logDailyActivity(50, 0, null, { sentenceSessionCompleted: true });
         window.dbManager.scheduleCloudSync();
         return day;
     }

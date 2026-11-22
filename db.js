@@ -394,6 +394,7 @@ class DatabaseManager {
         const word = await this.get("vocabulary", wordId);
         if (!word) return null;
 
+        const wasMasteredBefore = word.status === "mastered";
         const now = new Date();
         const addDays = (days) => {
             const d = new Date(now);
@@ -441,8 +442,49 @@ class DatabaseManager {
 
         word.updatedAt = now.toISOString();
         await this.put("vocabulary", word);
+
+        if (!wasMasteredBefore && word.status === "mastered") {
+            await this.recordDailyWordEvent(wordId, { masteredDelta: 1 });
+        }
+
         this.scheduleCloudSync();
         return word;
+    }
+
+    async recordDailyWordEvent(wordId, { isCorrect = null, masteredDelta = 0 } = {}) {
+        const today = new Date().toISOString().split("T")[0];
+        const existing = (await this.get("activity", today)) || {
+            date: today,
+            xpEarned: 0,
+            sentencesCount: 0,
+            actionsCount: 0,
+            wordsStudied: 0,
+            wordIdsStudied: [],
+            quizAnswersCount: 0,
+            quizCorrectCount: 0,
+            quizWrongCount: 0,
+            vocabTestsCompleted: 0,
+            sentenceSessionsCompleted: 0,
+            masteredToday: 0
+        };
+
+        const idSet = new Set(Array.isArray(existing.wordIdsStudied) ? existing.wordIdsStudied : []);
+        if (wordId) idSet.add(wordId);
+        existing.wordIdsStudied = Array.from(idSet);
+        existing.wordsStudied = Math.max(existing.wordsStudied || 0, existing.wordIdsStudied.length);
+
+        if (isCorrect !== null) {
+            existing.quizAnswersCount = (existing.quizAnswersCount || 0) + 1;
+            if (isCorrect) existing.quizCorrectCount = (existing.quizCorrectCount || 0) + 1;
+            else existing.quizWrongCount = (existing.quizWrongCount || 0) + 1;
+            existing.actionsCount = (existing.actionsCount || 0) + 1;
+        }
+        if (masteredDelta > 0) {
+            existing.masteredToday = (existing.masteredToday || 0) + masteredDelta;
+            existing.actionsCount = (existing.actionsCount || 0) + 1;
+        }
+
+        await this.put("activity", existing);
     }
 
     // Testlerde Kelimenin Hangi Anlamıyla Çıktığını ve Doğru/Yanlış Sayısını Kaydet
@@ -466,6 +508,7 @@ class DatabaseManager {
 
         word.updatedAt = new Date().toISOString();
         await this.put("vocabulary", word);
+        await this.recordDailyWordEvent(wordId, { isCorrect: Boolean(isCorrect) });
         this.scheduleCloudSync();
         return word;
     }
@@ -515,18 +558,32 @@ class DatabaseManager {
     }
 
     // Günlük Aktivite ve Seri (Streak) Güncelleme
-    async logDailyActivity(xpEarned = 10, sentencesCount = 0, accuracyScore = null) {
+    async logDailyActivity(xpEarned = 10, sentencesCount = 0, accuracyScore = null, extra = {}) {
         const today = new Date().toISOString().split("T")[0];
         const existing = await this.get("activity", today) || {
             date: today,
             xpEarned: 0,
             sentencesCount: 0,
-            actionsCount: 0
+            actionsCount: 0,
+            wordsStudied: 0,
+            wordIdsStudied: [],
+            quizAnswersCount: 0,
+            quizCorrectCount: 0,
+            quizWrongCount: 0,
+            vocabTestsCompleted: 0,
+            sentenceSessionsCompleted: 0,
+            masteredToday: 0
         };
 
-        existing.xpEarned += xpEarned;
-        existing.sentencesCount += sentencesCount;
-        existing.actionsCount += 1;
+        existing.xpEarned = (existing.xpEarned || 0) + xpEarned;
+        existing.sentencesCount = (existing.sentencesCount || 0) + sentencesCount;
+        existing.actionsCount = (existing.actionsCount || 0) + 1;
+        if (extra?.vocabTestCompleted) {
+            existing.vocabTestsCompleted = (existing.vocabTestsCompleted || 0) + 1;
+        }
+        if (extra?.sentenceSessionCompleted) {
+            existing.sentenceSessionsCompleted = (existing.sentenceSessionsCompleted || 0) + 1;
+        }
         await this.put("activity", existing);
 
         // Profil & Seri (Streak) Güncelle
@@ -541,6 +598,12 @@ class DatabaseManager {
             if (accuracyScore !== null && !isNaN(accuracyScore)) {
                 profile.accuracySum = (profile.accuracySum || 0) + accuracyScore;
             }
+            if (extra?.vocabTestCompleted) {
+                profile.totalVocabTestsCompleted = (profile.totalVocabTestsCompleted || 0) + 1;
+            }
+            if (extra?.sentenceSessionCompleted) {
+                profile.totalSentenceSessionsCompleted = (profile.totalSentenceSessionsCompleted || 0) + 1;
+            }
 
             const yesterdayDate = new Date();
             yesterdayDate.setDate(yesterdayDate.getDate() - 1);
@@ -554,6 +617,7 @@ class DatabaseManager {
                 }
                 profile.lastActiveDate = today;
             }
+            profile.bestStreak = Math.max(profile.bestStreak || 0, profile.streak || 0);
 
             await this.put("settings", profile);
         }
@@ -1208,11 +1272,23 @@ class DatabaseManager {
                 if (!la || !merge) {
                     mergedAct.push(ra);
                 } else {
+                    const mergedIds = Array.from(new Set([
+                        ...(Array.isArray(la.wordIdsStudied) ? la.wordIdsStudied : []),
+                        ...(Array.isArray(ra.wordIdsStudied) ? ra.wordIdsStudied : [])
+                    ]));
                     mergedAct.push({
                         date: ra.date,
                         xpEarned: Math.max(la.xpEarned || 0, ra.xpEarned || 0),
                         sentencesCount: Math.max(la.sentencesCount || 0, ra.sentencesCount || 0),
-                        actionsCount: Math.max(la.actionsCount || 0, ra.actionsCount || 0)
+                        actionsCount: Math.max(la.actionsCount || 0, ra.actionsCount || 0),
+                        wordIdsStudied: mergedIds,
+                        wordsStudied: Math.max(la.wordsStudied || 0, ra.wordsStudied || 0, mergedIds.length),
+                        quizAnswersCount: Math.max(la.quizAnswersCount || 0, ra.quizAnswersCount || 0),
+                        quizCorrectCount: Math.max(la.quizCorrectCount || 0, ra.quizCorrectCount || 0),
+                        quizWrongCount: Math.max(la.quizWrongCount || 0, ra.quizWrongCount || 0),
+                        vocabTestsCompleted: Math.max(la.vocabTestsCompleted || 0, ra.vocabTestsCompleted || 0),
+                        sentenceSessionsCompleted: Math.max(la.sentenceSessionsCompleted || 0, ra.sentenceSessionsCompleted || 0),
+                        masteredToday: Math.max(la.masteredToday || 0, ra.masteredToday || 0)
                     });
                 }
             }
@@ -1265,9 +1341,12 @@ class DatabaseManager {
                         currentDay: Math.max(lp.currentDay || 1, rp.currentDay || 1),
                         cefrLevel: remotePrefsNewer ? (rp.cefrLevel || lp.cefrLevel || "B1") : (lp.cefrLevel || rp.cefrLevel || "B1"),
                         totalSentencesTranslated: Math.max(lp.totalSentencesTranslated || 0, rp.totalSentencesTranslated || 0),
+                        totalVocabTestsCompleted: Math.max(lp.totalVocabTestsCompleted || 0, rp.totalVocabTestsCompleted || 0),
+                        totalSentenceSessionsCompleted: Math.max(lp.totalSentenceSessionsCompleted || 0, rp.totalSentenceSessionsCompleted || 0),
                         accuracySum: Math.max(lp.accuracySum || 0, rp.accuracySum || 0),
                         completedDaysCount: Math.max(lp.completedDaysCount || 0, rp.completedDaysCount || 0, completedDays),
                         streak: bestStreak,
+                        bestStreak: Math.max(lp.bestStreak || 0, rp.bestStreak || 0, bestStreak),
                         lastActiveDate: bestLastDate,
                         avatar: remotePrefsNewer ? (rp.avatar || lp.avatar || "🧙‍♂️") : (lp.avatar || rp.avatar || "🧙‍♂️"),
                         theme: remotePrefsNewer ? (rp.theme || lp.theme || "dark") : (lp.theme || rp.theme || "dark"),
