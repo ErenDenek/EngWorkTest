@@ -28,7 +28,7 @@
         <div class="brand-area" id="nav-brand">
             <div class="brand-logo">🛡️</div>
             <div>
-                <h1 class="brand-title">LinguaQuest <span class="badge-ai">AI</span></h1>
+                <h1 class="brand-title">LinguaQuest <span class="badge-ai">AI</span> <span class="version-pill" id="app-version-badge">v1.5.0</span></h1>
                 <p class="brand-subtitle">RPG & Yapay Zeka Destekli Dil Arenası</p>
             </div>
         </div>
@@ -57,7 +57,7 @@
             </button>
             <button class="tab-btn" data-tab="settings-view">
                 <span class="tab-icon">⚙️</span>
-                <span>Ayarlar & Yedekleme</span>
+                <span>Ayarlar</span>
             </button>
         </nav>
 
@@ -94,7 +94,7 @@
             </div>
             <button class="icon-btn" id="btn-quick-add-word"
                 title="Yeni Kelime, Phrasal Verb veya Bağlaç Kalıbı Ekle (+ AI Doldur)">
-                ➕ Kelime / Kalıp Ekle
+                ➕<span class="quick-add-label"> Kelime / Kalıp Ekle</span>
             </button>
             <button class="icon-btn theme-toggle-btn" id="btn-theme-toggle" title="Karanlık / Aydınlık Mod Değiştir">
                 🌙
@@ -334,15 +334,18 @@
             </div>
         </section>
 
-        <!-- 4. GÖRÜNÜM: AYARLAR, GEMINI API KEY VE MACBOOK <-> WINDOWS JSON YEDEKLEME -->
+        <!-- 4. GÖRÜNÜM: AYARLAR VE GEMINI API KEY -->
         <section id="settings-view" class="view-section">
-            <div class="settings-grid">
+            <div class="settings-single-col">
                 <!-- Gemini AI Yapılandırması -->
                 <div class="glass-panel">
-                    <h3>🤖 Google Gemini Yapay Zeka Ayarları</h3>
-                    <p class="text-muted">Dinamik 10 cümle üretimi, 3 katmanlı çeviri analizi, gün sonu hikayesi ve "AI
-                        ile Kelime Doldur" özellikleri doğrudan tarayıcınızdan Gemini REST API'ye bağlanır. Anahtar
-                        girilmediğinde uygulama otomatik olarak <strong>Akıllı Demo Modunda</strong> çalışır.</p>
+                    <div style="display:flex;justify-content:space-between;align-items:center;gap:0.75rem;flex-wrap:wrap;">
+                        <h3>🤖 Google Gemini Yapay Zeka &amp; Profil Ayarları</h3>
+                        <span class="version-pill" id="settings-version-badge">v1.5.0</span>
+                    </div>
+                    <p class="text-muted" style="margin-top:0.35rem;">Dinamik cümle üretimi, 3 katmanlı çeviri analizi, gün sonu hikayesi ve "AI
+                        ile Kelime Doldur" özellikleri doğrudan tarayıcınızdan Gemini REST API'ye bağlanır. Anahtarınız ve tüm ilerlemeniz
+                        otomatik olarak bulut profilinize kaydedilir.</p>
 
                     <div class="form-group">
                         <label for="setting-api-key">Google Gemini API Key</label>
@@ -350,15 +353,14 @@
                             <input type="password" id="setting-api-key" class="form-input" placeholder="AIzaSy..." />
                             <button class="btn btn-secondary" type="button" id="btn-toggle-key-vis">👁️</button>
                         </div>
-                        <small class="text-muted">API anahtarınız yalnızca kendi cihazınızdaki IndexedDB içinde
-                            saklanır, hiçbir ara sunucuya gönderilmez.</small>
+                        <small class="text-muted">Kaydettiğinizde Gemini API anahtarınız şifrelenerek bulut profilinize senkronize edilir; başka cihazda tekrar girmenize gerek kalmaz.</small>
                     </div>
 
                     <div class="form-group">
                         <label for="setting-ai-model">Gemini Modeli Seçin</label>
                         <div class="input-with-btn">
                             <select id="setting-ai-model" class="form-select">
-                                <option value="gemini-2.5-flash">gemini-2.5-flash (Önerilen - Hızlı & Akıllı)</option>
+                                <option value="gemini-2.5-flash">gemini-2.5-flash (Önerilen - Hızlı &amp; Akıllı)</option>
                                 <option value="gemini-2.5-pro">gemini-2.5-pro (Derin Dil Analizi)</option>
                                 <option value="gemini-2.0-flash">gemini-2.0-flash</option>
                             </select>
@@ -371,182 +373,38 @@
                             butonuna basarak Google hesabınıza tanımlı en yeni modelleri çekebilirsiniz.</small>
                     </div>
 
-                    <div class="form-group">
-                        <label for="setting-cefr-level">İngilizce Seviyeniz (CEFR) — Kelime ve Cümle Zorluğu</label>
-                        <select id="setting-cefr-level" class="form-select">
-                            <option value="A1">A1 — Başlangıç (Beginner)</option>
-                            <option value="A2">A2 — Temel (Elementary)</option>
-                            <option value="B1" selected>B1 — Orta (Intermediate)</option>
-                            <option value="B2">B2 — İyi Orta (Upper-Intermediate)</option>
-                            <option value="C1">C1 — İleri (Advanced)</option>
-                        </select>
-                        <small class="text-muted">Seçtiğiniz seviyeye göre günlük kelimeler, phrasal verbler ve çeviri
-                            cümleleri dinamik olarak uyarlanır.</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="setting-avatar">Karakter Avatarı Seçin</label>
-                        <select id="setting-avatar" class="form-select">
-                            <option value="🧙‍♂️">🧙‍♂️ Büyücü (Wizard)</option>
-                            <option value="🥷">🥷 Ninja</option>
-                            <option value="🦸‍♀️">🦸‍♀️ Süper Kahraman</option>
-                            <option value="🤖">🤖 Siber Gezgin</option>
-                            <option value="🦊">🦊 Bilge Tilki</option>
-                        </select>
-                    </div>
-
-                    <div class="form-actions">
-                        <button class="btn btn-primary" id="btn-save-settings">💾 Ayarları Kaydet</button>
-                        <button class="btn btn-secondary" id="btn-test-api">🔌 API Bağlantısını Test Et</button>
-                    </div>
-                    <div id="api-test-feedback" class="feedback-banner" style="display:none"></div>
-                </div>
-
-                <!-- Veri Kalıcılığı: JSON Backup & Restore -->
-                <div class="glass-panel">
-                    <h3>💾 Cihazlar Arası Veri Taşıma (MacBook ↔ Windows)</h3>
-                    <p class="text-muted">Tüm ilerlemeniz, kelime havuzunuz, SRS tarihleriniz ve hata kumbaranız
-                        tarayıcınızın <strong>IndexedDB</strong> veritabanında tutulur. Verilerinizi yedeklemek veya
-                        başka bir bilgisayara taşımak için JSON dışa/içe aktarma araçlarını kullanın.</p>
-
-                    <div class="backup-actions-box">
-                        <div class="backup-card">
-                            <h4>📤 İlerlemeyi Dışa Aktar (JSON Backup)</h4>
-                            <p class="text-muted">Tüm kelime havuzunu, tamamlanan günleri ve istatistikleri tek bir
-                                <code>.json</code> dosyası olarak indirir.
-                            </p>
-                            <button class="btn btn-primary" id="btn-export-json">⬇️ JSON Yedeği İndir</button>
-                        </div>
-
-                        <div class="backup-card">
-                            <h4>🎁 Arkadaşınla Paylaş (Sadece Kelime Havuzu)</h4>
-                            <p class="text-muted">Eklediğin tüm kelimeleri, phrasal verb'leri ve yan anlamları temiz
-                                olarak indirir; <strong>senin ilerlemen, hataların ve Gemini API Key'in dahil
-                                    edilmez.</strong></p>
-                            <button class="btn btn-accent" id="btn-export-words-only">🎁 Sadece Kelimeleri İndir
-                                (Arkadaş İçin)</button>
-                        </div>
-
-                        <div class="backup-card">
-                            <h4>📥 İlerlemeyi / Kelime Paketini İçe Aktar (Restore)</h4>
-                            <p class="text-muted">Tam yedeği veya arkadaşının paylaştığı kelime paketi JSON dosyasını
-                                yükle.</p>
-                            <label class="btn btn-accent file-label">
-                                📂 JSON Dosyası Seç ve Yükle
-                                <input type="file" id="input-import-json" accept=".json" hidden />
-                            </label>
-                        </div>
-
-                        <div class="backup-card" style="border-color:rgba(239,68,68,0.35);">
-                            <h4>🔄 Kelimeleri Koru, Sadece İlerlemeyi Sıfırla</h4>
-                            <p class="text-muted">Tüm kelime havuzun ve yan anlamların korunur; yalnızca Gün-1'e döner
-                                ve doğru/yanlış test sayaçların sıfırlanır.</p>
-                            <button class="btn btn-danger btn-sm" id="btn-reset-progress-keep-words">🧹 İlerlemeyi
-                                Sıfırla (Kelimeler Kalsın)</button>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Çoklu Kullanıcı (Multi-User) & Tek Hesap GitHub Gist Senkronizasyonu -->
-                <div class="glass-panel mobile-guide-panel" id="cloud-sync-panel">
-                    <h3>☁️ Çoklu Kullanıcı & GitHub Gist Bulut Senkronizasyonu</h3>
-                    <p class="text-muted">
-                        Tüm kullanıcıların verileri tek bir gizli GitHub Gist içinde ayrı dosyalar
-                        (<code>linguaquest_user_kullanici.json</code>) olarak tutulur; kimsenin ilerlemesi karışmaz.
-                        Ortak gömülü anahtar tanımlandıysa diğer kullanıcıların token girmesine gerek kalmaz — yalnızca
-                        kullanıcı adlarını yazmaları yeterlidir.
-                    </p>
-
-                    <div class="backup-card" style="margin-top:0.85rem;width:100%;">
-                        <div style="display:flex;justify-content:space-between;align-items:center;width:100%;flex-wrap:wrap;gap:0.6rem;">
-                            <h4>👤 Aktif Kullanıcı (Profil) Seçimi</h4>
-                            <button type="button" class="btn btn-secondary btn-sm" id="btn-refresh-cloud-users">
-                                🔄 Buluttaki Kullanıcıları Yenile
-                            </button>
-                        </div>
-                        <div class="input-with-btn" style="width:100%;margin-top:0.45rem;">
-                            <input type="text" id="setting-username" class="form-input"
-                                placeholder="Kullanıcı adınızı yazın (ör. eren, ahmet, zeynep)..." />
-                            <button type="button" class="btn btn-primary" id="btn-switch-user">
-                                👤 Bu Kullanıcıya Geç / Oluştur
-                            </button>
-                        </div>
-                        <div id="cloud-users-pills" class="scenario-pills" style="margin-top:0.65rem;"></div>
-                        <small class="text-muted">Profil değiştirdiğinizde yerel ilerleme mevcut kullanıcıya kaydedilir ve seçilen kullanıcının buluttaki ilerlemesi yüklenir.</small>
-                    </div>
-
                     <div class="form-row-2" style="margin-top:1rem;">
                         <div class="form-group" style="margin-top:0;">
-                            <label for="setting-github-token">GitHub Personal Access Token (<code>gist</code> yetkili — Yönetici)</label>
-                            <div class="input-with-btn">
-                                <input type="password" id="setting-github-token" class="form-input"
-                                    placeholder="Ortak kod gömülüyse diğer kişilerin girmesi gerekmez" />
-                                <button class="btn btn-secondary" type="button" id="btn-toggle-gh-token">👁️</button>
-                            </div>
-                            <small class="text-muted" id="shared-token-hint">Yalnızca yönetici cihazında token girip aşağıdaki "Herkes İçin Gömülü Kod Üret" ile tek hesaba sabitleyebilirsiniz.</small>
+                            <label for="setting-cefr-level">İngilizce Seviyeniz (CEFR)</label>
+                            <select id="setting-cefr-level" class="form-select">
+                                <option value="A1">A1 — Başlangıç (Beginner)</option>
+                                <option value="A2">A2 — Temel (Elementary)</option>
+                                <option value="B1" selected>B1 — Orta (Intermediate)</option>
+                                <option value="B2">B2 — İyi Orta (Upper-Intermediate)</option>
+                                <option value="C1">C1 — İleri (Advanced)</option>
+                            </select>
                         </div>
 
                         <div class="form-group" style="margin-top:0;">
-                            <label for="setting-gist-id">Gist ID (İsteğe Bağlı)</label>
-                            <input type="text" id="setting-gist-id" class="form-input"
-                                placeholder="Boş bırakılırsa otomatik bulunur / oluşturulur" />
-                            <small class="text-muted">Tüm kullanıcılar bu Gist ID altındaki kendi dosyasına yazar.</small>
+                            <label for="setting-avatar">Karakter Avatarı</label>
+                            <select id="setting-avatar" class="form-select">
+                                <option value="🧙‍♂️">🧙‍♂️ Büyücü (Wizard)</option>
+                                <option value="🥷">🥷 Ninja</option>
+                                <option value="🦸‍♀️">🦸‍♀️ Süper Kahraman</option>
+                                <option value="🤖">🤖 Siber Gezgin</option>
+                                <option value="🦊">🦊 Bilge Tilki</option>
+                            </select>
                         </div>
                     </div>
 
-                    <div class="form-actions">
-                        <button type="button" class="btn btn-primary" id="btn-cloud-sync-now">☁️ Şimdi Eşitle</button>
-                        <button type="button" class="btn btn-secondary" id="btn-cloud-pull">⬇️ Buluttan Çek</button>
-                        <button type="button" class="btn btn-accent" id="btn-cloud-push">⬆️ Buluta Gönder</button>
-                        <button type="button" class="btn btn-warning btn-sm" id="btn-generate-embedded-token">
-                            🔐 Herkes İçin Gömülü Kod Üret (Tek Hesap Modu)
-                        </button>
-                    </div>
-                    <div id="cloud-sync-feedback" class="feedback-banner" style="display:none"></div>
-                    <div id="embedded-token-output" class="feedback-banner" style="display:none;word-break:break-all;"></div>
-                </div>
-
-                <!-- iPhone & Mobil (App Store'suz PWA) Kurulum Rehberi -->
-                <div class="glass-panel mobile-guide-panel">
-                    <h3>📱 iPhone & Android Mobil Uygulama Kurulum Rehberi (App Store'suz)</h3>
-                    <p class="text-muted">
-                        <strong>LinguaQuest AI</strong>, PWA (Progressive Web App) uyumludur. App Store veya Google
-                        Play'e
-                        yüklemeden iPhone ana ekranınıza tam ekran yerli uygulama gibi kurabilirsiniz.
-                    </p>
-
-                    <div class="mobile-guide-steps">
-                        <div class="backup-card">
-                            <h4>🏠 Yöntem 1: Evde Aynı Wi-Fi Üzerinden Anında Dene</h4>
-                            <ol class="mobile-guide-list text-muted">
-                                <li>Proje klasöründeki <code>iphone_sunucu_baslat.bat</code> dosyasına çift tıklayın
-                                    (arka planda yerel sunucu açılır).</li>
-                                <li>iPhone'unuzun bilgisayarınızla <strong>aynı Wi-Fi ağında</strong> olduğundan emin
-                                    olun.</li>
-                                <li>iPhone'da <strong>Safari</strong> uygulamasını açın ve adres çubuğuna sunucu
-                                    ekranındaki adresi yazın (ör. <code>http://172.16.0.38:8080</code>).</li>
-                                <li>Safari alt menüsündeki <strong>Paylaş (⬆️)</strong> simgesine dokunun ➔ <strong>"Ana
-                                        Ekrana Ekle"</strong> seçin.</li>
-                            </ol>
+                    <div class="form-actions" style="justify-content:space-between;align-items:center;">
+                        <div style="display:flex;gap:0.65rem;flex-wrap:wrap;">
+                            <button class="btn btn-primary" id="btn-save-settings">💾 Ayarları Kaydet &amp; Buluta Gönder</button>
+                            <button class="btn btn-secondary" id="btn-test-api">🔌 API Bağlantısını Test Et</button>
                         </div>
-
-                        <div class="backup-card">
-                            <h4>🌍 Yöntem 2: Her Yerden & Mobil Veride Ücretsiz Kalıcı Kullanım</h4>
-                            <ol class="mobile-guide-list text-muted">
-                                <li>Tarayıcıda <code>app.netlify.com/drop</code> (veya GitHub Pages) sayfasını açın.
-                                </li>
-                                <li>Bu <code>EngWorker</code> klasörünü sürükleyip bırakın — 10 saniyede size özel
-                                    ücretsiz bir <code>https://...</code> linki oluşur.</li>
-                                <li>O linki iPhone <strong>Safari</strong> ile açıp <strong>Paylaş (⬆️) ➔ "Ana Ekrana
-                                        Ekle"</strong> dediğinizde uygulama her yerde çalışır (çevrimdışı önbellek
-                                    destekli).</li>
-                                <li>Bilgisayardaki kelimelerinizi ve ilerlemenizi telefona taşımak için yukarıdan
-                                    <strong>⬇️ JSON Yedeği İndir</strong> yapıp telefondan <strong>📂 JSON Dosyası Seç
-                                        ve Yükle</strong> kullanabilirsiniz.
-                                </li>
-                            </ol>
-                        </div>
+                        <button class="btn btn-danger btn-sm" id="btn-reset-progress-keep-words">🧹 İlerlemeyi Sıfırla</button>
                     </div>
+                    <div id="api-test-feedback" class="feedback-banner" style="display:none"></div>
                 </div>
             </div>
         </section>
@@ -822,21 +680,12 @@
             </div>
             <div class="modal-body">
                 <p class="text-muted">
-                    İlerlemeniz kimseninkiyle karışmaz. Kendi kullanıcı adınızı yazın veya aşağıdan mevcut bir profili seçin:
+                    Başlamak için adınızı seçin. Tüm ilerlemeniz ve Gemini API anahtarınız bulut hesabınızdan otomatik yüklenecektir:
                 </p>
-                <div class="form-group">
-                    <label for="modal-username-input">Kullanıcı Adınız (ör. eren, ahmet, zeynep)</label>
-                    <div class="input-with-btn">
-                        <input type="text" id="modal-username-input" class="form-input" placeholder="Adınızı yazın..." />
-                        <button type="button" class="btn btn-primary" id="btn-modal-switch-user">🚀 Profili Aç / Başla</button>
-                    </div>
+                <div id="modal-user-select-grid" class="user-select-grid">
+                    <!-- JS tarafından cloudConfig.js içindeki izinli kullanıcılar buraya çizilir -->
                 </div>
-                <div class="form-group">
-                    <label>Buluttaki Mevcut Profiller (Tek Tıkla Geç)</label>
-                    <div id="modal-cloud-users-pills" class="scenario-pills">
-                        <small class="text-muted">Bulut kullanıcıları kontrol ediliyor...</small>
-                    </div>
-                </div>
+                <div id="modal-user-status" class="feedback-banner" style="display:none;"></div>
             </div>
         </div>
     </div>
@@ -848,6 +697,7 @@
     <div id="toast-container"></div>
 
     <!-- Modüler Scriptler -->
+    <script src="cloudConfig.js"></script>
     <script src="defaultWords.js"></script>
     <script src="db.js"></script>
     <script src="gemini.js"></script>

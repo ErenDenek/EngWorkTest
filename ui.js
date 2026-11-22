@@ -9,11 +9,35 @@ class UIController {
         this.activeVocabSubtab = "word"; // 'word' | 'phrasal' | 'connector' | 'mistakes' | 'all'
         this.vocabRenderLimit = 100;
         this._lastCloudPullAt = 0;
+        this._activeQuizKeyHandler = null;
+        this._quizAutoAdvanceTimer = null;
+    }
+
+    clearActiveQuizListeners() {
+        if (this._activeQuizKeyHandler) {
+            document.removeEventListener("keydown", this._activeQuizKeyHandler);
+            this._activeQuizKeyHandler = null;
+        }
+        if (this._quizAutoAdvanceTimer) {
+            clearTimeout(this._quizAutoAdvanceTimer);
+            this._quizAutoAdvanceTimer = null;
+        }
+    }
+
+    setMobileFocusMode(enabled) {
+        document.body.classList.toggle("mobile-focus-mode", Boolean(enabled));
     }
 
     async init() {
         const overview = await window.gameEngine.init();
         this.selectedDayNumber = overview.currentDayNumber;
+
+        // Sürüm versiyonu rozetlerini cloudConfig.js'den güncelle
+        const appVer = window.dbManager.getAppVersion();
+        const navVer = document.getElementById("app-version-badge");
+        const setVer = document.getElementById("settings-version-badge");
+        if (navVer) navVer.textContent = appVer;
+        if (setVer) setVer.textContent = appVer;
 
         // Tema ayarı
         const theme = overview.profile?.theme || "dark";
@@ -28,42 +52,45 @@ class UIController {
         this.bindGlobalEvents();
         await this.refreshAllViews();
 
-        // Otomatik ilerleme çekme: uygulama açıldığında ve sekme/uygulama tekrar öne geldiğinde
-        const autoPullIfConfigured = async () => {
+        // Otomatik bulut çekme: sadece GitHub Gist üzerinden senkronize olur
+        const autoPullIfConfigured = async (isInitial = false) => {
             try {
                 const cfg = await window.dbManager.getCloudConfig();
                 if (!cfg.githubToken || !cfg.username) return;
                 this._lastCloudPullAt = Date.now();
-                const pullRes = await window.dbManager.pullFromGitHubGist({ silent: true, merge: true });
-                if (pullRes?.applied && (pullRes.restoredWords > 0 || pullRes.restoredDays > 0)) {
+                const pullRes = await window.dbManager.pullFromGitHubGist({ silent: true, merge: !isInitial });
+                if (pullRes?.applied) {
                     const updatedOverview = await window.gameEngine.init();
                     this.selectedDayNumber = updatedOverview.currentDayNumber;
                     await this.refreshAllViews();
-                    this.showToast(`☁️ "${cfg.username}" profili buluttan güncellendi!`);
+                    if (!isInitial && (pullRes.restoredWords > 0 || pullRes.restoredDays > 0)) {
+                        this.showToast(`☁️ "${cfg.displayName || cfg.username}" buluttan güncellendi!`);
+                    }
                 }
             } catch (_) {}
         };
 
-        await autoPullIfConfigured();
+        const cloudCfg = await window.dbManager.getCloudConfig();
+        if (!cloudCfg.username) {
+            await this.openUsernamePromptModal(true);
+        } else {
+            await autoPullIfConfigured(true);
+            await this.checkFirstRunApiPrompt();
+        }
 
         document.addEventListener("visibilitychange", () => {
             if (document.visibilityState === "visible" && Date.now() - this._lastCloudPullAt > 20000) {
-                autoPullIfConfigured();
+                autoPullIfConfigured(false);
             }
         });
-
-        const cloudCfg = await window.dbManager.getCloudConfig();
-        if (cloudCfg.githubToken && !cloudCfg.username) {
-            await this.openUsernamePromptModal();
-        } else {
-            await this.checkFirstRunApiPrompt();
-        }
     }
 
     bindGlobalEvents() {
         // Sekme Geçişleri
         document.querySelectorAll(".tab-btn").forEach(btn => {
             btn.addEventListener("click", async () => {
+                this.clearActiveQuizListeners();
+                this.setMobileFocusMode(false);
                 document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
                 document.querySelectorAll(".view-section").forEach(s => s.classList.remove("active"));
                 btn.classList.add("active");
@@ -130,6 +157,8 @@ class UIController {
 
         // Aşama Modal Kapatma
         document.getElementById("btn-close-stage-modal").addEventListener("click", () => {
+            this.clearActiveQuizListeners();
+            this.setMobileFocusMode(false);
             document.getElementById("stage-modal-overlay").style.display = "none";
         });
 
@@ -338,56 +367,28 @@ class UIController {
             document.getElementById("api-onboarding-modal").style.display = "none";
             await this.updateHUD();
             await this.loadSettingsForm();
-            this.showToast(`✅ Gemini API Key ve "${modelVal}" modeli kaydedildi!`);
+            window.dbManager.syncToGitHubGist({ silent: true }).catch(() => {});
+            this.showToast(`✅ Gemini API Key ve "${modelVal}" modeli buluta kaydedildi!`);
         });
 
-        // JSON Backup, Sadece Kelime Paylaşımı & İlerleme Sıfırlama
-        document.getElementById("btn-export-json").addEventListener("click", () => this.exportBackupFile());
-        document.getElementById("input-import-json").addEventListener("change", (e) => this.importBackupFile(e));
-
-        const btnExportWordsOnly = document.getElementById("btn-export-words-only");
-        if (btnExportWordsOnly) {
-            btnExportWordsOnly.addEventListener("click", () => this.exportWordsOnlyFile());
-        }
-
+        // İlerleme Sıfırlama
         const btnResetKeepWords = document.getElementById("btn-reset-progress-keep-words");
         if (btnResetKeepWords) {
             btnResetKeepWords.addEventListener("click", () => this.handleResetProgressKeepWords());
         }
 
-        // Üstteki Bulut / Kullanıcı Rozeti tıklanınca Hızlı Profil Seçim Modalını aç
-        document.getElementById("hud-cloud-mode")?.addEventListener("click", () => this.openUsernamePromptModal());
+        // Üstteki Kullanıcı Rozeti tıklanınca Profil Seçim Modalını aç
+        document.getElementById("hud-cloud-mode")?.addEventListener("click", () => this.openUsernamePromptModal(false));
 
-        // Çoklu Kullanıcı Modal Eventleri
+        // Kullanıcı Seçim Modalı Kapatma (sadece aktif kullanıcı seçiliyse kapatılabilir)
         document.getElementById("btn-close-user-modal")?.addEventListener("click", async () => {
-            document.getElementById("username-prompt-modal").style.display = "none";
-            await this.checkFirstRunApiPrompt();
-        });
-        document.getElementById("btn-modal-switch-user")?.addEventListener("click", async () => {
-            const val = document.getElementById("modal-username-input")?.value || "";
-            const ok = await this.handleSwitchUserProfile(val);
-            if (ok) {
-                document.getElementById("username-prompt-modal").style.display = "none";
-                await this.checkFirstRunApiPrompt();
+            const cfg = await window.dbManager.getCloudConfig();
+            if (!cfg.username) {
+                this.showToast("⚠️ Devam etmek için lütfen listeden adınızı seçin.");
+                return;
             }
+            document.getElementById("username-prompt-modal").style.display = "none";
         });
-
-        // Ayarlar -> Çoklu Kullanıcı & GitHub Gist Eventleri
-        document.getElementById("btn-switch-user")?.addEventListener("click", () => {
-            const val = document.getElementById("setting-username")?.value || "";
-            this.handleSwitchUserProfile(val, "cloud-sync-feedback");
-        });
-        document.getElementById("btn-refresh-cloud-users")?.addEventListener("click", () => {
-            this.renderCloudUserPills("cloud-users-pills", "cloud-sync-feedback");
-        });
-        document.getElementById("btn-toggle-gh-token")?.addEventListener("click", () => {
-            const inp = document.getElementById("setting-github-token");
-            if (inp) inp.type = inp.type === "password" ? "text" : "password";
-        });
-        document.getElementById("btn-cloud-sync-now")?.addEventListener("click", () => this.handleCloudSyncAction("both"));
-        document.getElementById("btn-cloud-pull")?.addEventListener("click", () => this.handleCloudSyncAction("pull"));
-        document.getElementById("btn-cloud-push")?.addEventListener("click", () => this.handleCloudSyncAction("push"));
-        document.getElementById("btn-generate-embedded-token")?.addEventListener("click", () => this.handleGenerateEmbeddedToken());
     }
 
     async refreshAllViews() {
@@ -441,7 +442,8 @@ class UIController {
         if (!pill || !dot || !txt) return;
 
         const cfg = await window.dbManager.getCloudConfig();
-        const userLabel = cfg.username ? `👤 ${cfg.username}` : "👤 Seçilmedi";
+        const labelName = cfg.displayName || cfg.username;
+        const userLabel = labelName ? `👤 ${labelName}` : "👤 Kullanıcı Seç";
 
         if (state === "syncing") {
             dot.className = "status-dot demo";
@@ -456,14 +458,18 @@ class UIController {
         }
         if (cfg.githubToken && cfg.username) {
             dot.className = "status-dot live";
-            txt.textContent = `${userLabel} • ☁️ Aktif`;
+            txt.textContent = `${userLabel} • ☁️`;
             pill.title = cfg.lastSyncAt
-                ? `Kullanıcı: ${cfg.username} | Son Eşitleme: ${new Date(cfg.lastSyncAt).toLocaleString("tr-TR")}`
-                : `Kullanıcı: ${cfg.username} | GitHub Gist Aktif`;
+                ? `Kullanıcı: ${labelName} | Son Bulut Eşitleme: ${new Date(cfg.lastSyncAt).toLocaleString("tr-TR")}`
+                : `Kullanıcı: ${labelName} | GitHub Gist Bulut Aktif`;
+        } else if (!cfg.githubToken) {
+            dot.className = "status-dot demo";
+            txt.textContent = `${userLabel} • ⚠️ Config Yok`;
+            pill.title = "cloudConfig.js içinde şifreli GitHub Token tanımlı değil.";
         } else {
             dot.className = "status-dot demo";
-            txt.textContent = cfg.username ? `${userLabel} • Bulut Yok` : "👤 Profil Seç";
-            pill.title = "Kullanıcı profili seçmek veya değiştirmek için tıklayın";
+            txt.textContent = "👤 Kullanıcı Seç";
+            pill.title = "Başlamak için kullanıcı seçin";
         }
     }
 
@@ -657,6 +663,7 @@ class UIController {
         const body = document.getElementById("stage-modal-body");
 
         overlay.style.display = "flex";
+        this.setMobileFocusMode(true);
         badge.textContent = `Gün ${dayNumber} • Aşama ${stageNum}`;
 
         const { day, words, phrases } = await window.gameEngine.getDayFullDetails(dayNumber);
@@ -781,7 +788,9 @@ class UIController {
     }
 
     // Ortak Kelime Soru Etkileşimi (Yazmalı Mod + Çoktan Seçmeli Mod)
-    mountVocabQuestionBox(quizBoxEl, q, { onSuccess, onMistake }) {
+    mountVocabQuestionBox(quizBoxEl, q, { onSuccess, onMistake, onAutoAdvance = null }) {
+        this.clearActiveQuizListeners();
+
         let answered = false;
         let wrongTries = 0;
         let hintLvl = 0;
@@ -792,8 +801,8 @@ class UIController {
             const totalLetters = (q.correctAnswer || "").replace(/[^a-zA-Z0-9]/g, "").length;
             quizBoxEl.innerHTML = `
                 <small class="text-muted">Verilen Türkçe anlamın İngilizce karşılığını aşağıya <strong>yazın</strong>:</small>
-                <h2 style="font-size:1.65rem;margin:0.45rem 0;color:var(--accent-primary);">${q.promptTitle}</h2>
-                <p class="text-muted">${q.promptSub}</p>
+                <h2 class="quiz-prompt-word">${q.promptTitle}</h2>
+                <p class="text-muted quiz-prompt-sub">${q.promptSub}</p>
 
                 <div class="form-group" style="margin-top:1rem;">
                     <div class="input-with-btn">
@@ -914,48 +923,87 @@ class UIController {
 
         // Çoktan Seçmeli (EN_TO_TR veya TR_TO_EN)
         quizBoxEl.innerHTML = `
-            <small class="text-muted">
-                ${q.type === "EN_TO_TR"
-                ? `Bu İngilizce ifadenin <strong>"${q.testedMeaningObj.context || "verilen"}"</strong> bağlamındaki Türkçe anlamını seçin:`
-                : `Verilen Türkçe anlamın (<strong>${q.testedMeaningObj.context || "Genel"}</strong>) doğru İngilizce karşılığını seçin:`}
-            </small>
-            <h2 style="font-size:1.65rem;margin:0.45rem 0;color:var(--accent-primary);">${q.promptTitle}</h2>
-            <p class="text-muted">${q.promptSub}</p>
+            <div class="quiz-prompt-header">
+                <small class="text-muted quiz-instruction-text">
+                    ${q.type === "EN_TO_TR"
+                    ? `<strong>"${q.testedMeaningObj.context || "verilen"}"</strong> bağlamındaki Türkçe anlamını seçin:`
+                    : `Verilen Türkçe anlamın (<strong>${q.testedMeaningObj.context || "Genel"}</strong>) İngilizce karşılığını seçin:`}
+                </small>
+                <h2 class="quiz-prompt-word">${q.promptTitle}</h2>
+                <p class="text-muted quiz-prompt-sub">${q.promptSub}</p>
+            </div>
 
             <div class="quiz-options-grid">
                 ${q.options.map((opt, idx) => `
                     <button type="button" class="quiz-option-btn" data-opt="${idx}">
-                        <span style="opacity:0.6;margin-right:0.4rem;">${["A)", "B)", "C)", "D)"][idx]}</span> ${opt}
+                        <span class="quiz-key-badge">${idx + 1}</span>
+                        <span class="quiz-option-label">${opt}</span>
                     </button>
                 `).join("")}
             </div>
-            <div id="quiz-step-feedback" style="margin-top:1rem;"></div>
+            <div class="quiz-kbd-hint">⌨️ Klavyeden <strong>1, 2, 3, 4</strong> tuşları ile hızlı seçim yapabilirsiniz</div>
+            <div id="quiz-step-feedback" style="margin-top:0.75rem;"></div>
         `;
 
         const fbEl = document.getElementById("quiz-step-feedback");
-        quizBoxEl.querySelectorAll(".quiz-option-btn").forEach(btn => {
+        const allOptionBtns = Array.from(quizBoxEl.querySelectorAll(".quiz-option-btn"));
+
+        allOptionBtns.forEach(btn => {
             btn.addEventListener("click", async () => {
-                if (answered) return;
+                if (answered || btn.disabled) return;
                 const chosenIdx = parseInt(btn.getAttribute("data-opt"), 10);
                 const chosenVal = q.options[chosenIdx];
 
                 if (chosenVal === q.correctAnswer) {
                     answered = true;
+                    this.clearActiveQuizListeners();
+                    allOptionBtns.forEach(b => { b.disabled = true; });
                     btn.classList.add("correct");
                     fbEl.innerHTML = `
                         <div class="feedback-banner" style="background:rgba(16,185,129,0.18);color:#34d399;">
-                            ✅ <strong>Doğru!</strong> "${q.termObj.term}" (${q.testedMeaningIndex + 1}. Anlam - ${q.testedMeaningObj.context || "Genel"}): <strong>${q.testedMeaningObj.tr}</strong>
+                            ✅ <strong>Doğru!</strong> "${q.termObj.term}" = <strong>${q.testedMeaningObj.tr}</strong>
                         </div>`;
                     await onSuccess(wrongTries === 0);
+                    if (typeof onAutoAdvance === "function") {
+                        this._quizAutoAdvanceTimer = setTimeout(() => {
+                            onAutoAdvance();
+                        }, 220);
+                    }
                 } else {
                     wrongTries++;
                     btn.classList.add("wrong");
                     btn.disabled = true;
                     await onMistake();
-                    fbEl.innerHTML = `<div class="feedback-banner" style="background:rgba(239,68,68,0.18);color:#f87171;">❌ Yanlış şık! Bağlam ipucuna dikkat ederek doğru seçeneği bulun.</div>`;
+                    fbEl.innerHTML = `<div class="feedback-banner" style="background:rgba(239,68,68,0.18);color:#f87171;">❌ Yanlış şık! Doğru seçeneği bulun.</div>`;
                 }
             });
         });
+
+        // 1, 2, 3, 4 klavye kısayolları ile şık seçimi
+        this._activeQuizKeyHandler = (e) => {
+            if (answered) return;
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
+            const activeTag = (document.activeElement?.tagName || "").toUpperCase();
+            if (activeTag === "INPUT" || activeTag === "TEXTAREA" || activeTag === "SELECT" || document.activeElement?.isContentEditable) {
+                return;
+            }
+            if (!document.body.contains(quizBoxEl) || quizBoxEl.offsetParent === null) return;
+
+            let optIndex = -1;
+            if (e.key === "1" || e.code === "Digit1" || e.code === "Numpad1") optIndex = 0;
+            else if (e.key === "2" || e.code === "Digit2" || e.code === "Numpad2") optIndex = 1;
+            else if (e.key === "3" || e.code === "Digit3" || e.code === "Numpad3") optIndex = 2;
+            else if (e.key === "4" || e.code === "Digit4" || e.code === "Numpad4") optIndex = 3;
+
+            if (optIndex >= 0) {
+                const targetBtn = quizBoxEl.querySelector(`.quiz-option-btn[data-opt="${optIndex}"]`);
+                if (targetBtn && !targetBtn.disabled) {
+                    e.preventDefault();
+                    targetBtn.click();
+                }
+            }
+        };
+        document.addEventListener("keydown", this._activeQuizKeyHandler);
     }
 
     // AŞAMA 1 & 2 İÇİN HAVUZDAN KARIŞIK, TEKİL YAN ANLAM ODAKLI TEST (ŞIKLI + YAZMALI)
@@ -991,31 +1039,54 @@ class UIController {
         const renderQuizStep = () => {
             const q = questions[qIndex];
             answeredCorrectly = false;
+            let stepAdvanced = false;
+            const isMC = q.type !== "WRITE_EN";
+            const progressPct = Math.round(((qIndex + 1) / questions.length) * 100);
+
+            const advanceStep = async () => {
+                if (stepAdvanced) return;
+                stepAdvanced = true;
+                this.clearActiveQuizListeners();
+                if (qIndex < questions.length - 1) {
+                    qIndex++;
+                    renderQuizStep();
+                } else {
+                    await window.gameEngine.completeVocabStage(dayNumber, stageNum, currentDecisions);
+                    this.setMobileFocusMode(false);
+                    overlay.style.display = "none";
+                    this.showToast(`🎉 Aşama ${stageNum} Testi tamamlandı! Sonraki aşamanın kilidi açıldı.`);
+                    await this.refreshAllViews();
+                }
+            };
 
             body.innerHTML = `
-                <div class="arena-progress-header">
-                    <div>
-                        <span class="tag-badge tag-cefr">${q.badge}</span>
-                        <strong style="margin-left:0.5rem;">Soru ${qIndex + 1} / ${questions.length}</strong>
+                <div class="focus-quiz-topbar">
+                    <div class="focus-quiz-progress-wrap">
+                        <div class="quiz-progress-track">
+                            <div class="quiz-progress-fill" style="width:${progressPct}%"></div>
+                        </div>
+                        <span class="focus-quiz-counter">${qIndex + 1} / ${questions.length}</span>
                     </div>
-                    <div class="scenario-pills">
+                    <div class="scenario-pills quiz-mode-pills">
                         <button type="button" class="scenario-pill ${questionTypeMode === "mixed" ? "active" : ""}" data-qmode="mixed">🔀 Karışık</button>
-                        <button type="button" class="scenario-pill ${questionTypeMode === "write_only" ? "active" : ""}" data-qmode="write_only">⌨️ Sadece Yazmalı</button>
-                        <button type="button" class="scenario-pill ${questionTypeMode === "mc_only" ? "active" : ""}" data-qmode="mc_only">🔘 Sadece Şıklı</button>
+                        <button type="button" class="scenario-pill ${questionTypeMode === "write_only" ? "active" : ""}" data-qmode="write_only">⌨️ Yazmalı</button>
+                        <button type="button" class="scenario-pill ${questionTypeMode === "mc_only" ? "active" : ""}" data-qmode="mc_only">🔘 Şıklı</button>
                     </div>
                 </div>
 
-                <div class="quiz-container-box" id="stage-quiz-box"></div>
+                <div class="quiz-container-box ${isMC ? "quiz-mc-mode" : "quiz-write-mode"}" id="stage-quiz-box"></div>
 
+                ${!isMC ? `
                 <div class="form-actions" style="justify-content:flex-end;">
                     ${qIndex < questions.length - 1
                     ? `<button class="btn btn-primary" id="btn-next-quiz-q" disabled>Sonraki Soru (${qIndex + 2}/${questions.length}) ➔</button>`
                     : `<button class="btn btn-accent" id="btn-finish-quiz-stage" disabled>✅ Testi Bitir ve Sonraki Aşamayı Aç (+30 XP)</button>`}
-                </div>
+                </div>` : ""}
             `;
 
             body.querySelectorAll("[data-qmode]").forEach(mBtn => {
                 mBtn.addEventListener("click", () => {
+                    this.clearActiveQuizListeners();
                     const nextMode = mBtn.getAttribute("data-qmode");
                     this.renderMultipleChoiceQuiz(dayNumber, stageNum, stageItems, currentDecisions, nextMode);
                 });
@@ -1034,26 +1105,23 @@ class UIController {
                 },
                 onMistake: async () => {
                     await window.dbManager.recordQuizAttempt(q.termObj.id, q.testedMeaningIndex, false);
-                }
+                },
+                onAutoAdvance: isMC ? () => advanceStep() : null
             });
 
             const nextBtn = document.getElementById("btn-next-quiz-q");
             if (nextBtn) {
                 nextBtn.addEventListener("click", () => {
                     if (!answeredCorrectly) return;
-                    qIndex++;
-                    renderQuizStep();
+                    advanceStep();
                 });
             }
 
             const finBtn = document.getElementById("btn-finish-quiz-stage");
             if (finBtn) {
-                finBtn.addEventListener("click", async () => {
+                finBtn.addEventListener("click", () => {
                     if (!answeredCorrectly) return;
-                    await window.gameEngine.completeVocabStage(dayNumber, stageNum, currentDecisions);
-                    overlay.style.display = "none";
-                    this.showToast(`🎉 Aşama ${stageNum} Testi tamamlandı! Sonraki aşamanın kilidi açıldı.`);
-                    await this.refreshAllViews();
+                    advanceStep();
                 });
             }
         };
@@ -1317,6 +1385,7 @@ class UIController {
                         return;
                     }
                     await window.gameEngine.completeArenaStage(dayNumber);
+                    this.setMobileFocusMode(false);
                     document.getElementById("stage-modal-overlay").style.display = "none";
                     this.showToast("⚔️ Aktif Çeviri Arenası tamamlandı! Aşama 4 (Boss Battle) kilidi açıldı!");
                     await this.refreshAllViews();
@@ -1395,6 +1464,7 @@ class UIController {
             this.launchConfetti();
 
             document.getElementById("btn-celebrate-next-day").addEventListener("click", async () => {
+                this.setMobileFocusMode(false);
                 document.getElementById("stage-modal-overlay").style.display = "none";
                 this.selectedDayNumber = dayNumber + 1;
                 await this.refreshAllViews();
@@ -1417,6 +1487,7 @@ class UIController {
         const body = document.getElementById("stage-modal-body");
 
         overlay.style.display = "flex";
+        this.setMobileFocusMode(true);
         badge.textContent = "Aralıklı Tekrar (3 - 7 - 21 Gün SRS)";
         title.textContent = "🧠 Çoklu Anlam Isınma Turu";
 
@@ -1431,6 +1502,7 @@ class UIController {
                     </div>
                 `;
                 document.getElementById("btn-close-srs-done").addEventListener("click", async () => {
+                    this.setMobileFocusMode(false);
                     overlay.style.display = "none";
                     await this.refreshAllViews();
                 });
@@ -1500,6 +1572,7 @@ class UIController {
         const body = document.getElementById("stage-modal-body");
 
         overlay.style.display = "flex";
+        this.setMobileFocusMode(true);
         badge.textContent = "Hata Kumbarası Telafi Modu";
         title.textContent = "⚔️ Hata Telafi Sınavı";
 
@@ -1514,6 +1587,7 @@ class UIController {
                     </div>
                 `;
                 document.getElementById("btn-close-mistake-exam").addEventListener("click", async () => {
+                    this.setMobileFocusMode(false);
                     overlay.style.display = "none";
                     await this.renderStatsDashboard();
                 });
@@ -2298,24 +2372,8 @@ class UIController {
             cefrSelect.value = profile.cefrLevel;
         }
 
-        const userInp = document.getElementById("setting-username");
-        const ghTokenInp = document.getElementById("setting-github-token");
-        const ghGistInp = document.getElementById("setting-gist-id");
-        const hintEl = document.getElementById("shared-token-hint");
-
-        if (userInp) userInp.value = cloudCfg.username || "";
-        if (ghGistInp) ghGistInp.value = cloudCfg.gistId || "";
-        if (ghTokenInp) {
-            ghTokenInp.value = cloudCfg.rawCustomToken || "";
-            if (cloudCfg.isSharedEmbedded) {
-                ghTokenInp.placeholder = "🔐 Ortak Tek Hesap Anahtarı Kodda Gömülü (Hazır)";
-            }
-        }
-        if (hintEl && cloudCfg.isSharedEmbedded) {
-            hintEl.innerHTML = `<span style="color:var(--accent-primary);font-weight:700;">✅ Tek GitHub hesabı anahtarı kodda gömülü! Başka hiçbir kullanıcının token girmesine gerek yok.</span>`;
-        }
-
-        this.renderCloudUserPills("cloud-users-pills").catch(() => {});
+        const setVer = document.getElementById("settings-version-badge");
+        if (setVer) setVer.textContent = window.dbManager.getAppVersion();
     }
 
     async saveSettingsForm() {
@@ -2333,17 +2391,6 @@ class UIController {
             preferredScenario: this.activeScenario
         });
 
-        const ghTokenVal = document.getElementById("setting-github-token")?.value.trim();
-        const ghGistVal = document.getElementById("setting-gist-id")?.value.trim();
-        const userVal = document.getElementById("setting-username")?.value.trim();
-        if (ghTokenVal !== undefined || ghGistVal !== undefined || userVal !== undefined) {
-            await window.dbManager.saveCloudConfig({
-                ...(ghTokenVal ? { githubToken: ghTokenVal } : {}),
-                ...(ghGistVal !== undefined ? { gistId: ghGistVal } : {}),
-                ...(userVal ? { username: userVal } : {})
-            });
-        }
-
         const profile = await window.dbManager.get("settings", "profile");
         if (profile) {
             profile.avatar = avatar;
@@ -2352,105 +2399,92 @@ class UIController {
         }
 
         await window.gameEngine.updateTargetCefrLevel(cefrLevel);
-        window.dbManager.scheduleCloudSync();
         await this.updateHUD();
         await this.renderMapAndQuest();
-        this.showToast(`💾 Ayarlar, Gemini modeli ve ${cefrLevel} seviyeniz kaydedildi!`);
+
+        const syncRes = await window.dbManager.syncToGitHubGist({ silent: true });
+        if (syncRes?.ok) {
+            this.showToast(`☁️ Ayarlar, Gemini API Key ve ${cefrLevel} seviyeniz buluta kaydedildi!`);
+        } else {
+            this.showToast(`💾 Ayarlar ve ${cefrLevel} seviyeniz güncellendi!`);
+        }
     }
 
-    async openUsernamePromptModal() {
+    async openUsernamePromptModal(mandatory = false) {
         const modal = document.getElementById("username-prompt-modal");
         if (!modal) return;
+        const grid = document.getElementById("modal-user-select-grid");
+        const statusEl = document.getElementById("modal-user-status");
+        const closeBtn = document.getElementById("btn-close-user-modal");
         const cfg = await window.dbManager.getCloudConfig();
-        const inp = document.getElementById("modal-username-input");
-        if (inp) inp.value = cfg.username || "";
-        modal.style.display = "flex";
-        this.renderCloudUserPills("modal-cloud-users-pills", null, true).catch(() => {});
-    }
+        const allowedUsers = window.dbManager.getAllowedUsers();
 
-    async renderCloudUserPills(containerId, feedbackId = null, closeModalOnSelect = false) {
-        const container = document.getElementById(containerId);
-        if (!container) return;
-
-        const cfg = await window.dbManager.getCloudConfig();
-        if (!cfg.githubToken) {
-            container.innerHTML = `<small class="text-muted">Bulut kullanıcılarını görmek için yönetici GitHub Token veya kodda gömülü ortak anahtar gereklidir.</small>`;
-            return;
+        if (closeBtn) {
+            closeBtn.style.display = (mandatory && !cfg.username) ? "none" : "inline-flex";
+        }
+        if (statusEl) {
+            if (!cfg.githubToken) {
+                statusEl.style.display = "block";
+                statusEl.style.background = "rgba(245, 158, 11, 0.18)";
+                statusEl.textContent = "⚠️ Bulut bağlantısı henüz yapılandırılmamış. Yönetici admin-key-generator.html ile cloudConfig.js oluşturmalıdır.";
+            } else {
+                statusEl.style.display = "none";
+            }
         }
 
-        container.innerHTML = `<small class="text-muted">⏳ Buluttaki kullanıcı profilleri taranıyor...</small>`;
-        try {
-            const users = await window.dbManager.listCloudUsers();
-            if (users.length === 0) {
-                container.innerHTML = `<small class="text-muted">Henüz bulutta kayıtlı profil yok. Yukarıya adınızı yazıp ilk profili oluşturabilirsiniz.</small>`;
-                return;
-            }
-            container.innerHTML = users.map(u => `
-                <button type="button" class="scenario-pill ${u === cfg.username ? "active" : ""}" data-cloud-user="${u}">
-                    👤 ${u}${u === cfg.username ? " (Aktif)" : ""}
-                </button>
-            `).join("");
+        if (grid) {
+            grid.innerHTML = allowedUsers.map(displayName => {
+                const isActive = cfg.displayName === displayName;
+                return `
+                    <button type="button" class="user-select-card ${isActive ? "active" : ""}" data-select-user="${displayName}">
+                        <span class="user-select-avatar">👤</span>
+                        <strong>${displayName}</strong>
+                        <small>${isActive ? "✅ Aktif Profil" : "Seç ve Buluttan Yükle"}</small>
+                    </button>
+                `;
+            }).join("");
 
-            container.querySelectorAll("[data-cloud-user]").forEach(btn => {
+            grid.querySelectorAll("[data-select-user]").forEach(btn => {
                 btn.addEventListener("click", async () => {
-                    const chosen = btn.getAttribute("data-cloud-user");
-                    const ok = await this.handleSwitchUserProfile(chosen, feedbackId);
-                    if (ok && closeModalOnSelect) {
-                        document.getElementById("username-prompt-modal").style.display = "none";
+                    const chosen = btn.getAttribute("data-select-user");
+                    grid.querySelectorAll("button").forEach(b => { b.disabled = true; });
+                    if (statusEl) {
+                        statusEl.style.display = "block";
+                        statusEl.style.background = "var(--bg-elevated)";
+                        statusEl.textContent = `⏳ "${chosen}" bulut profili ve Gemini ayarları yükleniyor...`;
+                    }
+                    const ok = await this.handleSwitchUserProfile(chosen);
+                    if (ok) {
+                        modal.style.display = "none";
                         await this.checkFirstRunApiPrompt();
+                    } else {
+                        grid.querySelectorAll("button").forEach(b => { b.disabled = false; });
+                        if (statusEl) {
+                            statusEl.style.background = "rgba(239, 68, 68, 0.2)";
+                            statusEl.textContent = "❌ Profil yüklenemedi. Lütfen internet bağlantınızı ve cloudConfig.js ayarını kontrol edin.";
+                        }
                     }
                 });
             });
-        } catch (err) {
-            container.innerHTML = `<small style="color:var(--accent-danger);">❌ Bulut profilleri alınamadı: ${err.message}</small>`;
         }
+
+        modal.style.display = "flex";
     }
 
-    async handleSwitchUserProfile(rawUsername, feedbackId = null) {
-        const norm = window.dbManager.normalizeUsername(rawUsername);
-        if (!norm) {
-            this.showToast("⚠️ Lütfen geçerli bir kullanıcı adı girin (ör. eren, ahmet).");
-            return false;
-        }
-
-        const banner = feedbackId ? document.getElementById(feedbackId) : null;
-        if (banner) {
-            banner.style.display = "block";
-            banner.style.background = "var(--bg-elevated)";
-            banner.textContent = `⏳ "${norm}" profili hazırlanıyor...`;
-        }
-
+    async handleSwitchUserProfile(selectedUser) {
         try {
-            const ghTokenInp = document.getElementById("setting-github-token");
-            const ghGistInp = document.getElementById("setting-gist-id");
-            if (ghTokenInp?.value.trim() || ghGistInp?.value.trim()) {
-                await window.dbManager.saveCloudConfig({
-                    ...(ghTokenInp?.value.trim() ? { githubToken: ghTokenInp.value.trim() } : {}),
-                    ...(ghGistInp?.value.trim() ? { gistId: ghGistInp.value.trim() } : {})
-                });
-            }
-
-            const res = await window.dbManager.switchUserProfile(norm);
+            const res = await window.dbManager.switchUserProfile(selectedUser);
             const overview = await window.gameEngine.init();
             this.selectedDayNumber = overview.currentDayNumber;
             await this.refreshAllViews();
             await this.loadSettingsForm();
 
             const msg = res.loadedFromCloud
-                ? `✅ "${res.username}" profili buluttan yüklendi!`
-                : `✅ "${res.username}" için yeni profil oluşturuldu!`;
-            if (banner) {
-                banner.style.background = "rgba(16, 185, 129, 0.2)";
-                banner.textContent = msg;
-            }
+                ? `☁️ "${res.displayName}" profili buluttan yüklendi!`
+                : `✅ "${res.displayName}" bulut profili başlatıldı!`;
             this.showToast(msg);
             return true;
         } catch (err) {
-            if (banner) {
-                banner.style.display = "block";
-                banner.style.background = "rgba(239, 68, 68, 0.2)";
-                banner.textContent = `❌ Profil geçiş hatası: ${err.message}`;
-            }
             this.showToast("❌ " + err.message);
             return false;
         }
@@ -2460,55 +2494,133 @@ class UIController {
         const tokenInp = document.getElementById("setting-github-token");
         const gistInp = document.getElementById("setting-gist-id");
         const outBox = document.getElementById("embedded-token-output");
+        const genBtn = document.getElementById("btn-generate-embedded-token");
 
         const cfg = await window.dbManager.getCloudConfig();
-        const rawToken = tokenInp?.value.trim() || cfg.githubToken;
+        const rawInputVal = tokenInp?.value.trim() || "";
+        const rawToken = window.dbManager.cleanTokenInput(rawInputVal || cfg.githubToken);
+
         if (!rawToken) {
-            this.showToast("⚠️ Önce yukarıdaki kutuya GitHub Token girin.");
+            if (outBox) {
+                outBox.style.display = "block";
+                outBox.style.background = "rgba(245, 158, 11, 0.18)";
+                outBox.innerHTML = `
+                    <div><strong>⚠️ Önce bir GitHub Token girmeniz gerekiyor</strong></div>
+                    <small class="text-muted" style="display:block;margin-top:0.35rem;">
+                        1. <a href="https://github.com/settings/tokens/new?scopes=gist&description=LinguaQuest+Sync" target="_blank" rel="noopener" style="color:var(--accent-info);font-weight:700;">Buraya tıklayıp</a> GitHub'da <code>gist</code> yetkili Classic Token oluşturun.<br>
+                        2. Üretilen <code>ghp_...</code> token'ını yukarıdaki <strong>GitHub Personal Access Token</strong> kutusuna yapıştırın.<br>
+                        3. Tekrar bu butona bastığınızda hem <strong>Tek Satırlık Paylaşım Anahtarı (LQKEY)</strong> hem de <strong>db.js Gömülü Kodu</strong> otomatik üretilir.
+                    </small>
+                `;
+                outBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            }
+            this.showToast("⚠️ Önce yukarıdaki kutuya gist yetkili GitHub Token girin.");
             return;
         }
 
+        if (genBtn) {
+            genBtn.disabled = true;
+            genBtn.textContent = "⏳ Anahtar Üretiliyor...";
+        }
         if (outBox) {
             outBox.style.display = "block";
             outBox.style.background = "var(--bg-elevated)";
-            outBox.textContent = "⏳ Ortak Gist kontrol ediliyor ve şifreli gömülü kod üretiliyor...";
+            outBox.textContent = "⏳ GitHub Gist kontrol ediliyor / oluşturuluyor ve paylaşım anahtarı üretiliyor...";
+            outBox.scrollIntoView({ behavior: "smooth", block: "nearest" });
         }
 
         try {
-            let gistId = gistInp?.value.trim() || cfg.gistId;
-            if (!gistId) {
-                const gist = await window.dbManager.findOrCreateGistId(rawToken, "");
-                gistId = gist.id;
-                if (gistInp) gistInp.value = gistId;
-                await window.dbManager.saveCloudConfig({ githubToken: rawToken, gistId });
-            }
+            let gistId = window.dbManager.normalizeGistId(gistInp?.value.trim() || cfg.gistId);
+            const activeFile = cfg.username ? window.dbManager.getUserGistFilename(cfg.username) : "";
 
+            // Token'ı ve Gist ID'yi doğrula / yoksa otomatik gizli Gist oluştur
+            const gist = await window.dbManager.findOrCreateGistId(rawToken, gistId, activeFile);
+            gistId = gist.id;
+            if (gistInp) gistInp.value = gistId;
+            await window.dbManager.saveCloudConfig({ githubToken: rawToken, gistId, autoSync: true });
+            await this.updateCloudStatusBadge();
+
+            const syncKey = window.dbManager.encodeSyncKey(rawToken, gistId);
             const encoded = window.dbManager.encodeTokenForRepo(rawToken);
             const snippet = `const SHARED_GIST_CONFIG = {\n    encodedToken: "${encoded}",\n    gistId: "${gistId}"\n};`;
 
+            const isWebHosted = window.location.protocol.startsWith("http");
+            const inviteUrl = isWebHosted
+                ? `${window.location.origin}${window.location.pathname}?lqkey=${encodeURIComponent(syncKey)}`
+                : "";
+
             if (outBox) {
-                outBox.style.background = "rgba(16, 185, 129, 0.16)";
+                outBox.style.background = "rgba(16, 185, 129, 0.14)";
                 outBox.innerHTML = `
-                    <div><strong>✅ Şifreli Tek-Hesap Kodu Hazır!</strong> (GitHub düz token olarak iptal etmez)</div>
-                    <small class="text-muted">Aşağıdaki kodu <code>db.js</code> başındaki <code>SHARED_GIST_CONFIG</code> yerine yapıştırıp GitHub'a yüklerseniz diğer kullanıcılar hiç token girmeden sadece isim seçip devam eder:</small>
-                    <pre style="margin-top:0.5rem;padding:0.65rem;background:var(--bg-secondary);border-radius:8px;overflow-x:auto;font-size:0.78rem;user-select:all;">${snippet}</pre>
-                    <button type="button" class="btn btn-primary btn-sm" id="btn-copy-embedded-snippet" style="margin-top:0.5rem;">📋 Kodu Kopyala</button>
+                    <div style="margin-bottom:0.65rem;">
+                        <strong>✅ Ortak Anahtar (Key) ve Gömülü Kod Başarıyla Üretildi!</strong>
+                        <div class="text-muted" style="font-size:0.8rem;margin-top:0.2rem;">Gist ID: <code>${gistId}</code></div>
+                    </div>
+
+                    <div style="margin-top:0.6rem;">
+                        <strong style="font-size:0.86rem;">1️⃣ Tek Satırlık Paylaşım Anahtarı (En Kolay Yöntem — Kod Düzenlemeden)</strong>
+                        <small class="text-muted" style="display:block;">Başka cihazda (telefon/arkadaş) <em>"Paylaşım Anahtarı (LQKEY) ile Hızlı Bağlan"</em> kutusuna yapıştırın:</small>
+                        <pre style="margin-top:0.35rem;padding:0.55rem;background:var(--bg-secondary);border-radius:8px;overflow-x:auto;font-size:0.75rem;user-select:all;white-space:pre-wrap;">${syncKey}</pre>
+                        <div class="form-actions" style="margin-top:0.45rem;">
+                            <button type="button" class="btn btn-primary btn-sm" id="btn-copy-sync-key">🔑 Paylaşım Anahtarını (LQKEY) Kopyala</button>
+                            ${inviteUrl ? `<button type="button" class="btn btn-accent btn-sm" id="btn-copy-invite-url">🔗 Tek Tıkla Davet Linkini Kopyala</button>` : ""}
+                        </div>
+                    </div>
+
+                    <details style="margin-top:0.85rem;">
+                        <summary style="cursor:pointer;font-weight:700;font-size:0.84rem;color:var(--text-primary);">
+                            2️⃣ Kalıcı Tek-Hesap Kodu (<code>db.js</code> içine gömmek için)
+                        </summary>
+                        <small class="text-muted" style="display:block;margin-top:0.35rem;">Bu kodu <code>db.js</code> başındaki <code>SHARED_GIST_CONFIG</code> yerine yapıştırırsanız kimsenin anahtar girmesine gerek kalmaz:</small>
+                        <pre style="margin-top:0.4rem;padding:0.6rem;background:var(--bg-secondary);border-radius:8px;overflow-x:auto;font-size:0.76rem;user-select:all;">${snippet}</pre>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-copy-embedded-snippet" style="margin-top:0.45rem;">📋 db.js Kodunu Kopyala</button>
+                    </details>
                 `;
+
+                document.getElementById("btn-copy-sync-key")?.addEventListener("click", async () => {
+                    const ok = await this.copyTextReliable(syncKey);
+                    this.showToast(ok ? "🔑 Paylaşım anahtarı (LQKEY) kopyalandı!" : "ℹ️ Yukarıdaki anahtarı seçip kopyalayabilirsiniz.");
+                });
+
+                document.getElementById("btn-copy-invite-url")?.addEventListener("click", async () => {
+                    const ok = await this.copyTextReliable(inviteUrl);
+                    this.showToast(ok ? "🔗 Tek tıkla davet linki panoya kopyalandı!" : "ℹ️ Link kopyalanamadı.");
+                });
+
                 document.getElementById("btn-copy-embedded-snippet")?.addEventListener("click", async () => {
-                    try {
-                        await navigator.clipboard.writeText(snippet);
-                        this.showToast("📋 Kod panoya kopyalandı! db.js içine yapıştırabilirsiniz.");
-                    } catch (_) {
-                        this.showToast("ℹ️ Kodu yukarıdaki kutudan seçip kopyalayabilirsiniz.");
-                    }
+                    const ok = await this.copyTextReliable(snippet);
+                    this.showToast(ok ? "📋 db.js gömülü kodu panoya kopyalandı!" : "ℹ️ Kodu yukarıdaki kutudan seçip kopyalayabilirsiniz.");
                 });
             }
+            this.showToast("🔐 Ortak paylaşım anahtarı ve Gist başarıyla oluşturuldu!");
+            this.renderCloudUserPills("cloud-users-pills").catch(() => {});
         } catch (err) {
+            const fallbackGistId = window.dbManager.normalizeGistId(gistInp?.value.trim() || cfg.gistId);
+            const fallbackKey = window.dbManager.encodeSyncKey(rawToken, fallbackGistId);
+            const fallbackEncoded = window.dbManager.encodeTokenForRepo(rawToken);
+            const fallbackSnippet = `const SHARED_GIST_CONFIG = {\n    encodedToken: "${fallbackEncoded}",\n    gistId: "${fallbackGistId}"\n};`;
+
             if (outBox) {
-                outBox.style.background = "rgba(239, 68, 68, 0.2)";
-                outBox.textContent = `❌ Kod üretilemedi: ${err.message}`;
+                outBox.style.background = "rgba(239, 68, 68, 0.18)";
+                outBox.innerHTML = `
+                    <div><strong>❌ GitHub Gist doğrulanamadı / oluşturulamadı:</strong> ${err.message}</div>
+                    <small class="text-muted" style="display:block;margin-top:0.35rem;">
+                        Not: Token oluştururken mutlaka <strong>Classic Personal Access Token</strong> seçip <code>gist</code> kutucuğunu işaretleyin
+                        (<a href="https://github.com/settings/tokens/new?scopes=gist&description=LinguaQuest+Sync" target="_blank" rel="noopener" style="color:var(--accent-info);">Token Oluştur</a>).
+                    </small>
+                    <details style="margin-top:0.6rem;">
+                        <summary style="cursor:pointer;font-size:0.82rem;font-weight:700;">Yine de çevrimdışı şifreli anahtarı göster</summary>
+                        <pre style="margin-top:0.35rem;padding:0.5rem;background:var(--bg-secondary);border-radius:8px;font-size:0.74rem;white-space:pre-wrap;user-select:all;">${fallbackKey}</pre>
+                        <pre style="margin-top:0.35rem;padding:0.5rem;background:var(--bg-secondary);border-radius:8px;font-size:0.74rem;user-select:all;">${fallbackSnippet}</pre>
+                    </details>
+                `;
             }
             this.showToast("❌ " + err.message);
+        } finally {
+            if (genBtn) {
+                genBtn.disabled = false;
+                genBtn.textContent = "🔐 Ortak Anahtar (Key) & Gömülü Kod Üret";
+            }
         }
     }
 
@@ -2676,6 +2788,8 @@ class UIController {
     // 6.A SERBEST CÜMLE PRATİĞİ (ÖN SEÇİM EKRANI + 3 KATMANLI AI ARENASI)
     // =========================================================================
     async renderSentencePracticeSetup() {
+        this.clearActiveQuizListeners();
+        this.setMobileFocusMode(false);
         const container = document.getElementById("sentence-practice-container");
         const allVocab = await window.dbManager.getAll("vocabulary");
         const profile = await window.dbManager.get("settings", "profile");
@@ -2791,6 +2905,7 @@ class UIController {
     }
 
     async startCustomSentencePracticeSession(setupState) {
+        this.setMobileFocusMode(true);
         const container = document.getElementById("sentence-practice-container");
         const allVocab = await window.dbManager.getAll("vocabulary");
         const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
@@ -2839,15 +2954,20 @@ class UIController {
             const grammarHint = currentQ.grammarTip || `Bu cümlede "${(currentQ.targetTerms || []).join(", ")}" ifadesini doğal bağlamda kullanın.`;
 
             container.innerHTML = `
-                <div class="glass-panel practice-setup-card">
-                    <div class="arena-progress-header">
-                        <div>
-                            <span class="tag-badge tag-cefr">${targetCefr} • ${setupState.topic}</span>
-                            <strong style="margin-left:0.5rem;">Cümle ${sIdx + 1} / ${sentences.length}</strong>
-                            <span class="text-muted" style="margin-left:0.5rem;">Hedef:</span>
-                            ${(currentQ.targetTerms || []).map(t => `<span class="tag-badge">${t}</span>`).join(" ")}
+                <div class="glass-panel practice-setup-card focus-quiz-card">
+                    <div class="focus-quiz-topbar">
+                        <button class="btn btn-secondary btn-sm focus-back-btn" id="btn-back-sentence-setup">← Çık</button>
+                        <div class="focus-quiz-progress-wrap">
+                            <div class="quiz-progress-track">
+                                <div class="quiz-progress-fill" style="width:${Math.round(((sIdx + 1) / sentences.length) * 100)}%"></div>
+                            </div>
+                            <span class="focus-quiz-counter">${sIdx + 1} / ${sentences.length}</span>
                         </div>
-                        <button class="btn btn-secondary btn-sm" id="btn-back-sentence-setup">⚙️ Seçim Ekranına Dön</button>
+                        <span class="tag-badge tag-cefr">${targetCefr}</span>
+                    </div>
+                    <div class="focus-target-tags" style="display:flex;gap:0.35rem;flex-wrap:wrap;margin-bottom:0.65rem;align-items:center;">
+                        <span class="text-muted" style="font-size:0.78rem;">Hedef:</span>
+                        ${(currentQ.targetTerms || []).map(t => `<span class="tag-badge">${t}</span>`).join(" ")}
                     </div>
 
                     <div class="sentence-prompt-box">
@@ -3069,6 +3189,8 @@ class UIController {
     // 6.B KELİME & KALIP HAVUZUNDAN TEST (ÖN SEÇİM EKRANI + ÇOKTAN SEÇMELİ ARENA)
     // =========================================================================
     async renderVocabTestSetup() {
+        this.clearActiveQuizListeners();
+        this.setMobileFocusMode(false);
         const container = document.getElementById("vocab-test-container");
         const allVocab = await window.dbManager.getAll("vocabulary");
 
@@ -3225,6 +3347,8 @@ class UIController {
             this.buildVocabQuizQuestion(item, idx, allVocab, catFilter, testConfig.questionTypeMode || "mixed")
         );
 
+        this.setMobileFocusMode(true);
+
         let qIdx = 0;
         let correctTotal = 0;
         let answered = false;
@@ -3232,28 +3356,53 @@ class UIController {
         const renderQ = () => {
             const q = questions[qIdx];
             answered = false;
+            let stepAdvanced = false;
+            const isMC = q.type !== "WRITE_EN";
+            const progressPct = Math.round(((qIdx + 1) / questions.length) * 100);
+
+            const advanceStep = async () => {
+                if (stepAdvanced) return;
+                stepAdvanced = true;
+                this.clearActiveQuizListeners();
+                if (qIdx < questions.length - 1) {
+                    qIdx++;
+                    renderQ();
+                } else {
+                    await window.dbManager.logDailyActivity(35, 0, null);
+                    await this.updateHUD();
+                    this.launchConfetti();
+                    this.showToast(`🎉 Test tamamlandı! (${correctTotal}/${questions.length} ilk denemede doğru • +35 XP)`);
+                    this.renderVocabTestSetup();
+                }
+            };
 
             container.innerHTML = `
-                <div class="glass-panel practice-setup-card">
-                    <div class="arena-progress-header">
-                        <div>
-                            <span class="tag-badge tag-cefr">${q.badge}</span>
-                            <strong style="margin-left:0.5rem;">Soru ${qIdx + 1} / ${questions.length}</strong>
+                <div class="glass-panel practice-setup-card focus-quiz-card">
+                    <div class="focus-quiz-topbar">
+                        <button class="btn btn-secondary btn-sm focus-back-btn" id="btn-back-vocab-test-setup">← Çık</button>
+                        <div class="focus-quiz-progress-wrap">
+                            <div class="quiz-progress-track">
+                                <div class="quiz-progress-fill" style="width:${progressPct}%"></div>
+                            </div>
+                            <span class="focus-quiz-counter">${qIdx + 1} / ${questions.length}</span>
                         </div>
-                        <button class="btn btn-secondary btn-sm" id="btn-back-vocab-test-setup">⚙️ Test Seçimine Dön</button>
+                        <span class="tag-badge tag-cefr focus-quiz-type-pill">${q.type === "WRITE_EN" ? "⌨️ Yaz" : (q.type === "EN_TO_TR" ? "🇬🇧➔🇹🇷" : "🇹🇷➔🇬🇧")}</span>
                     </div>
 
-                    <div class="quiz-container-box" id="custom-quiz-box"></div>
+                    <div class="quiz-container-box ${isMC ? "quiz-mc-mode" : "quiz-write-mode"}" id="custom-quiz-box"></div>
 
+                    ${!isMC ? `
                     <div class="form-actions" style="justify-content:flex-end;">
                         ${qIdx < questions.length - 1
                     ? `<button class="btn btn-primary" id="btn-custom-quiz-next" disabled>Sonraki Soru (${qIdx + 2}/${questions.length}) ➔</button>`
                     : `<button class="btn btn-accent" id="btn-custom-quiz-finish" disabled>🏁 Testi Bitir</button>`}
-                    </div>
+                    </div>` : ""}
                 </div>
             `;
 
-            document.getElementById("btn-back-vocab-test-setup").addEventListener("click", () => this.renderVocabTestSetup());
+            document.getElementById("btn-back-vocab-test-setup").addEventListener("click", () => {
+                this.renderVocabTestSetup();
+            });
 
             this.mountVocabQuestionBox(document.getElementById("custom-quiz-box"), q, {
                 onSuccess: async (firstTryOk = true, wasRevealed = false) => {
@@ -3271,27 +3420,23 @@ class UIController {
                 onMistake: async () => {
                     await window.dbManager.recordQuizAttempt(q.termObj.id, q.testedMeaningIndex, false);
                     await window.dbManager.updateWordSRS(q.termObj.id, "srs_fail");
-                }
+                },
+                onAutoAdvance: isMC ? () => advanceStep() : null
             });
 
             const nextBtn = document.getElementById("btn-custom-quiz-next");
             if (nextBtn) {
                 nextBtn.addEventListener("click", () => {
                     if (!answered) return;
-                    qIdx++;
-                    renderQ();
+                    advanceStep();
                 });
             }
 
             const finBtn = document.getElementById("btn-custom-quiz-finish");
             if (finBtn) {
-                finBtn.addEventListener("click", async () => {
+                finBtn.addEventListener("click", () => {
                     if (!answered) return;
-                    await window.dbManager.logDailyActivity(35, 0, null);
-                    await this.updateHUD();
-                    this.launchConfetti();
-                    this.showToast(`🎉 Test tamamlandı! (${correctTotal}/${questions.length} ilk denemede doğru • +35 XP)`);
-                    this.renderVocabTestSetup();
+                    advanceStep();
                 });
             }
         };

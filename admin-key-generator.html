@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="tr" data-theme="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LinguaQuest AI — Yönetici Token Şifreleme & cloudConfig.js Üretici</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0b0f19;
+            --card: #131b2e;
+            --elevated: #1e2942;
+            --text: #f1f5f9;
+            --muted: #94a3b8;
+            --border: rgba(148, 163, 184, 0.18);
+            --primary: #10b981;
+            --accent: #6366f1;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1.5rem;
+            line-height: 1.5;
+        }
+        .card {
+            width: 100%;
+            max-width: 720px;
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 1.75rem;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+        }
+        .badge {
+            display: inline-block;
+            background: linear-gradient(135deg, var(--accent), var(--primary));
+            color: #fff;
+            font-size: 0.72rem;
+            font-weight: 800;
+            padding: 0.2rem 0.6rem;
+            border-radius: 99px;
+            margin-bottom: 0.5rem;
+        }
+        h1 { font-size: 1.45rem; font-weight: 800; margin-bottom: 0.35rem; }
+        .muted { color: var(--muted); font-size: 0.88rem; }
+        .group { margin-top: 1.1rem; display: flex; flex-direction: column; gap: 0.4rem; }
+        label { font-weight: 700; font-size: 0.88rem; display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+        label a { color: #38bdf8; font-size: 0.8rem; text-decoration: none; }
+        label a:hover { text-decoration: underline; }
+        input, textarea {
+            width: 100%;
+            padding: 0.72rem 0.9rem;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: var(--elevated);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.92rem;
+        }
+        input:focus, textarea:focus { outline: 2px solid var(--accent); border-color: transparent; }
+        .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.85rem; }
+        @media (max-width: 600px) { .row-2 { grid-template-columns: 1fr; } }
+        .actions { margin-top: 1.35rem; display: flex; gap: 0.7rem; flex-wrap: wrap; }
+        .btn {
+            border: none;
+            padding: 0.72rem 1.15rem;
+            border-radius: 11px;
+            font-family: inherit;
+            font-weight: 700;
+            font-size: 0.9rem;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+        }
+        .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+        .btn-primary { background: var(--primary); color: #fff; }
+        .btn-accent { background: var(--accent); color: #fff; }
+        .btn-secondary { background: var(--elevated); color: var(--text); border: 1px solid var(--border); }
+        .status {
+            margin-top: 1rem;
+            padding: 0.85rem 1rem;
+            border-radius: 11px;
+            font-size: 0.88rem;
+            font-weight: 600;
+            display: none;
+        }
+        .status.info { display: block; background: var(--elevated); color: var(--text); }
+        .status.ok { display: block; background: rgba(16, 185, 129, 0.16); color: #34d399; }
+        .status.err { display: block; background: rgba(239, 68, 68, 0.18); color: #f87171; }
+        pre {
+            margin-top: 0.75rem;
+            padding: 0.9rem;
+            background: #090d16;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            color: #e2e8f0;
+            user-select: all;
+        }
+        .output-wrap { display: none; margin-top: 1.2rem; }
+    </style>
+</head>
+
+<body>
+    <div class="card">
+        <span class="badge">YÖNETİCİ ARACI • SADECE ŞİFRELEME</span>
+        <h1>🔐 GitHub Token Şifrele &amp; cloudConfig.js Üret</h1>
+        <p class="muted">
+            Bu sayfa yalnızca yönetici içindir. GitHub Token'ınızı şifreleyip gizli Gist'i otomatik hazırlar ve
+            GitHub'a yükleyeceğiniz <code>cloudConfig.js</code> dosyasını üretir. Kullanıcılar bir daha hiç token girmez.
+        </p>
+
+        <div class="group">
+            <label for="gh-token">
+                <span>1. GitHub Personal Access Token (<code>gist</code> yetkili Classic Token)</span>
+                <a href="https://github.com/settings/tokens/new?scopes=gist&description=LinguaQuest+Sync" target="_blank" rel="noopener">🔗 GitHub'da Token Oluştur</a>
+            </label>
+            <input type="password" id="gh-token" placeholder="ghp_..." autocomplete="off" />
+        </div>
+
+        <div class="row-2">
+            <div class="group">
+                <label for="gh-gist-id">2. Gist ID (İsteğe Bağlı)</label>
+                <input type="text" id="gh-gist-id" placeholder="Boş bırakılırsa otomatik bulunur / oluşturulur" />
+            </div>
+            <div class="group">
+                <label for="app-version">3. Sürüm Versiyonu</label>
+                <input type="text" id="app-version" value="v1.5.0" placeholder="v1.5.0" />
+            </div>
+        </div>
+
+        <div class="group">
+            <label for="allowed-users">4. İzinli Kullanıcı Listesi (Virgül veya satır sonu ile ayırın)</label>
+            <textarea id="allowed-users" rows="2">ErenD., MustafaT.</textarea>
+        </div>
+
+        <div class="actions">
+            <button type="button" class="btn btn-primary" id="btn-generate">🔐 Şifrele &amp; cloudConfig.js Üret</button>
+            <button type="button" class="btn btn-secondary" id="btn-toggle-vis">👁️ Token Göster/Gizle</button>
+        </div>
+
+        <div id="status-box" class="status"></div>
+
+        <div id="output-wrap" class="output-wrap">
+            <div class="muted" style="font-weight:700;color:var(--text);">Üretilen <code>cloudConfig.js</code> İçeriği:</div>
+            <pre id="code-output"></pre>
+            <div class="actions">
+                <button type="button" class="btn btn-primary" id="btn-download">⬇️ cloudConfig.js İndir</button>
+                <button type="button" class="btn btn-accent" id="btn-copy">📋 Kodu Kopyala</button>
+            </div>
+            <p class="muted" style="margin-top:0.65rem;">
+                İndirdiğiniz <code>cloudConfig.js</code> dosyasını proje klasöründeki mevcut <code>cloudConfig.js</code> ile değiştirip GitHub'a yükleyin.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        const GIST_FILE_PREFIX = "linguaquest_user_";
+        const GIST_META_FILENAME = "linguaquest_meta.json";
+
+        function cleanToken(raw) {
+            return (raw || "").trim().replace(/^(Bearer|token)\s+/i, "").replace(/\s+/g, "");
+        }
+
+        function normalizeGistId(input) {
+            const raw = (input || "").trim();
+            if (!raw) return "";
+            const m = raw.match(/gist\.github\.com\/(?:[^/\s]+\/)?([a-f0-9]{16,40})/i);
+            return m ? m[1] : raw;
+        }
+
+        function encodeTokenForRepo(rawToken) {
+            const clean = cleanToken(rawToken);
+            if (!clean) return "";
+            const key = "LQ_GIST_SHARED_2026";
+            const reversed = clean.split("").reverse().join("");
+            const bytes = new TextEncoder().encode(reversed);
+            let bin = "";
+            for (let i = 0; i < bytes.length; i++) {
+                bin += String.fromCharCode(bytes[i] ^ key.charCodeAt(i % key.length));
+            }
+            return "LQENC:" + btoa(bin);
+        }
+
+        async function ghReq(url, options, token) {
+            const headers = {
+                "Accept": "application/vnd.github+json",
+                "Authorization": `Bearer ${token}`,
+                ...(options.headers || {})
+            };
+            if (options.body && !headers["Content-Type"]) {
+                headers["Content-Type"] = "application/json";
+            }
+            const res = await fetch(url, { ...options, headers, cache: "no-store" });
+            if (!res.ok) {
+                let apiMsg = "";
+                try {
+                    const j = await res.json();
+                    if (j?.message) apiMsg = j.message;
+                } catch (_) {}
+                const scopes = res.headers.get("x-oauth-scopes") || "";
+                const isFineGrained = token.startsWith("github_pat_");
+                if (res.status === 401) {
+                    throw new Error(`Token geçersiz veya süresi dolmuş (401${apiMsg ? `: ${apiMsg}` : ""}).`);
+                }
+                if (res.status === 403 || (res.status === 404 && url.endsWith("/gists"))) {
+                    const hint = isFineGrained
+                        ? "Fine-grained token (github_pat_) kullanıyorsunuz: Account permissions → Gists → 'Read and write' yapın VEYA Classic Token (ghp_) oluşturup 'gist' kutusunu işaretleyin."
+                        : `Classic Token'da 'gist' kutucuğu işaretlenmemiş (Mevcut izinler: "${scopes || "yok"}").`;
+                    throw new Error(`GitHub ${res.status}${apiMsg ? ` (${apiMsg})` : ""} — ${hint}`);
+                }
+                throw new Error(`GitHub API Hatası (${res.status})${apiMsg ? `: ${apiMsg}` : ""}`);
+            }
+            return res.json();
+        }
+
+        async function findOrCreateGist(token, existingId) {
+            if (existingId) {
+                try {
+                    const g = await ghReq(`https://api.github.com/gists/${existingId}`, { method: "GET" }, token);
+                    if (g?.id) return g.id;
+                } catch (_) {}
+            }
+            const gists = await ghReq("https://api.github.com/gists?per_page=50", { method: "GET" }, token);
+            const found = (gists || []).find(g => g.files && Object.keys(g.files).some(fn =>
+                fn.startsWith(GIST_FILE_PREFIX) || fn === GIST_META_FILENAME || fn === "linguaquest_cloud_sync.json"
+            ));
+            if (found?.id) return found.id;
+
+            const created = await ghReq("https://api.github.com/gists", {
+                method: "POST",
+                body: JSON.stringify({
+                    description: "LinguaQuest AI — Çoklu Kullanıcı Otomatik İlerleme Gist'i (Secret)",
+                    public: false,
+                    files: {
+                        [GIST_META_FILENAME]: {
+                            content: JSON.stringify({ app: "LinguaQuest_AI_MultiUser", createdAt: new Date().toISOString() })
+                        }
+                    }
+                })
+            }, token);
+            return created.id;
+        }
+
+        let lastGeneratedCode = "";
+
+        document.getElementById("btn-toggle-vis").addEventListener("click", () => {
+            const inp = document.getElementById("gh-token");
+            inp.type = inp.type === "password" ? "text" : "password";
+        });
+
+        document.getElementById("btn-generate").addEventListener("click", async () => {
+            const btn = document.getElementById("btn-generate");
+            const statusBox = document.getElementById("status-box");
+            const outWrap = document.getElementById("output-wrap");
+            const codeEl = document.getElementById("code-output");
+
+            const token = cleanToken(document.getElementById("gh-token").value);
+            const manualGist = normalizeGistId(document.getElementById("gh-gist-id").value);
+            const version = (document.getElementById("app-version").value || "v1.5.0").trim();
+            const users = (document.getElementById("allowed-users").value || "")
+                .split(/[\n,]+/)
+                .map(s => s.trim())
+                .filter(Boolean);
+
+            if (!token) {
+                statusBox.className = "status err";
+                statusBox.textContent = "⚠️ Lütfen önce GitHub Personal Access Token (ghp_...) girin.";
+                return;
+            }
+            if (users.length === 0) {
+                statusBox.className = "status err";
+                statusBox.textContent = "⚠️ En az bir kullanıcı adı yazın (ör. ErenD., MustafaT.).";
+                return;
+            }
+
+            btn.disabled = true;
+            statusBox.className = "status info";
+            statusBox.textContent = "⏳ GitHub doğrulanıyor ve gizli Gist hazırlanıyor...";
+            outWrap.style.display = "none";
+
+            try {
+                const gistId = await findOrCreateGist(token, manualGist);
+                document.getElementById("gh-gist-id").value = gistId;
+                const encodedToken = encodeTokenForRepo(token);
+
+                lastGeneratedCode = [
+                    "// cloudConfig.js — LinguaQuest AI Merkezi Yapılandırma Dosyası",
+                    "// admin-key-generator.html ile otomatik üretilmiştir.",
+                    "window.LINGUAQUEST_CONFIG = {",
+                    `    version: ${JSON.stringify(version)},`,
+                    `    users: ${JSON.stringify(users, null, 8).replace(/\n\]$/, "\n    ]")},`,
+                    `    encodedToken: ${JSON.stringify(encodedToken)},`,
+                    `    gistId: ${JSON.stringify(gistId)}`,
+                    "};",
+                    ""
+                ].join("\n");
+
+                codeEl.textContent = lastGeneratedCode;
+                outWrap.style.display = "block";
+                statusBox.className = "status ok";
+                statusBox.textContent = `✅ Hazır! Gist ID: ${gistId} — Aşağıdan cloudConfig.js dosyasını indirip proje klasörüne koyun.`;
+            } catch (err) {
+                statusBox.className = "status err";
+                statusBox.textContent = "❌ Hata: " + err.message;
+            } finally {
+                btn.disabled = false;
+            }
+        });
+
+        document.getElementById("btn-copy").addEventListener("click", async () => {
+            if (!lastGeneratedCode) return;
+            try {
+                await navigator.clipboard.writeText(lastGeneratedCode);
+                document.getElementById("status-box").textContent = "📋 cloudConfig.js içeriği panoya kopyalandı!";
+            } catch (_) {
+                alert("Kodu yukarıdaki kutudan seçip kopyalayabilirsiniz.");
+            }
+        });
+
+        document.getElementById("btn-download").addEventListener("click", () => {
+            if (!lastGeneratedCode) return;
+            const blob = new Blob([lastGeneratedCode], { type: "application/javascript;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "cloudConfig.js";
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+    </script>
+</body>
+
+</html>

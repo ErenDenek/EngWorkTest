@@ -1,9 +1,10 @@
-const CACHE_NAME = 'linguaquest-pwa-v4';
+const CACHE_NAME = 'linguaquest-pwa-v1.5.0';
 
 const STATIC_ASSETS = [
   './',
   './index.html',
   './styles.css',
+  './cloudConfig.js',
   './defaultWords.js',
   './db.js',
   './gemini.js',

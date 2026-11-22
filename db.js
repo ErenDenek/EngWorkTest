@@ -1,16 +1,11 @@
-// db.js - IndexedDB Veri Kalıcılığı, SRS Motoru ve Tek Hesap Çoklu Kullanıcı GitHub Gist Senkronizasyonu
+// db.js - IndexedDB Çalışma Önbelleği, SRS Motoru ve GitHub Gist Bulut Senkronizasyonu
 const DB_NAME = "LinguaQuestDB";
 const DB_VERSION = 1;
 
-// Tek GitHub Hesabı (Arkadaşların Token Girmemesi İçin) Şifreli Ortak Yapılandırma:
-// Ayarlar -> "Herkes İçin Gömülü Kod Üret" ile oluşturduğunuz kodu buraya yapıştırabilirsiniz.
-const SHARED_GIST_CONFIG = {
-    encodedToken: "",
-    gistId: ""
-};
-const CLOUD_CONFIG_STORAGE_KEY = "LQ_CLOUD_CONFIG_V1";
+const ACTIVE_USER_STORAGE_KEY = "LQ_ACTIVE_USER_V1";
 const GIST_FILE_PREFIX = "linguaquest_user_";
 const GIST_FILE_SUFFIX = ".json";
+const GIST_META_FILENAME = "linguaquest_meta.json";
 
 class DatabaseManager {
     constructor() {
@@ -747,8 +742,33 @@ class DatabaseManager {
         return norm ? `${GIST_FILE_PREFIX}${norm}${GIST_FILE_SUFFIX}` : "";
     }
 
+    normalizeGistId(input) {
+        const raw = (input || "").toString().trim();
+        if (!raw) return "";
+        // Tam Gist URL'si yapıştırıldıysa ID'yi otomatik çıkar
+        const urlMatch = raw.match(/gist\.github\.com\/(?:[^/\s]+\/)?([a-f0-9]{16,40})/i);
+        if (urlMatch) return urlMatch[1];
+        const clean = raw.replace(/[^a-f0-9]/gi, "");
+        return clean.length >= 16 ? clean : raw;
+    }
+
+    cleanTokenInput(raw) {
+        let val = (raw || "").toString().trim();
+        if (!val) return "";
+        val = val.replace(/^(Bearer|token)\s+/i, "").replace(/\s+/g, "");
+        if (val.startsWith("LQKEY:")) {
+            const parsed = this.decodeSyncKey(val);
+            if (parsed?.token) return parsed.token;
+        }
+        if (val.startsWith("LQENC:")) {
+            const decoded = this.decodeRepoToken(val);
+            if (decoded) return decoded;
+        }
+        return val;
+    }
+
     encodeTokenForRepo(rawToken) {
-        const clean = (rawToken || "").trim();
+        const clean = this.cleanTokenInput(rawToken);
         if (!clean) return "";
         const key = "LQ_GIST_SHARED_2026";
         const reversed = clean.split("").reverse().join("");
@@ -778,64 +798,142 @@ class DatabaseManager {
         }
     }
 
+    encodeSyncKey(rawToken, gistId = "") {
+        const cleanToken = this.cleanTokenInput(rawToken);
+        if (!cleanToken) return "";
+        const cleanGist = this.normalizeGistId(gistId);
+        const payload = JSON.stringify({ t: cleanToken, g: cleanGist });
+        const key = "LQ_SYNC_KEY_2026";
+        const reversed = payload.split("").reverse().join("");
+        const bytes = new TextEncoder().encode(reversed);
+        let bin = "";
+        for (let i = 0; i < bytes.length; i++) {
+            bin += String.fromCharCode(bytes[i] ^ key.charCodeAt(i % key.length));
+        }
+        return "LQKEY:" + btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+
+    decodeSyncKey(syncKeyStr) {
+        try {
+            const val = (syncKeyStr || "").trim();
+            if (!val) return null;
+            if (val.startsWith("LQENC:")) {
+                const token = this.decodeRepoToken(val);
+                return token ? { token, gistId: "" } : null;
+            }
+            if (!val.startsWith("LQKEY:")) return null;
+            let b64 = val.slice(6).replace(/-/g, "+").replace(/_/g, "/");
+            while (b64.length % 4) b64 += "=";
+            const key = "LQ_SYNC_KEY_2026";
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) {
+                bytes[i] = bin.charCodeAt(i) ^ key.charCodeAt(i % key.length);
+            }
+            const reversed = new TextDecoder().decode(bytes);
+            const jsonStr = reversed.split("").reverse().join("");
+            const parsed = JSON.parse(jsonStr);
+            if (!parsed?.t) return null;
+            return { token: parsed.t, gistId: this.normalizeGistId(parsed.g || "") };
+        } catch (_) {
+            return null;
+        }
+    }
+
+    getAppConfig() {
+        const cfg = (typeof window !== "undefined" && window.LINGUAQUEST_CONFIG) ? window.LINGUAQUEST_CONFIG : {};
+        const users = Array.isArray(cfg.users) && cfg.users.length > 0
+            ? cfg.users.map(u => String(u).trim()).filter(Boolean)
+            : ["ErenD.", "MustafaT."];
+        return {
+            version: (cfg.version || "v1.5.0").trim(),
+            users,
+            encodedToken: (cfg.encodedToken || "").trim(),
+            gistId: this.normalizeGistId(cfg.gistId || "")
+        };
+    }
+
+    getAppVersion() {
+        return this.getAppConfig().version;
+    }
+
+    getAllowedUsers() {
+        return this.getAppConfig().users;
+    }
+
+    findAllowedDisplayName(rawName) {
+        const norm = this.normalizeUsername(rawName);
+        if (!norm) return "";
+        const found = this.getAllowedUsers().find(u => this.normalizeUsername(u) === norm);
+        return found || "";
+    }
+
     async getCloudConfig() {
+        const appCfg = this.getAppConfig();
         const dbCfg = await this.get("settings", "cloudConfig");
         const profile = await this.get("settings", "profile");
-        let lsCfg = null;
+
+        let storedUserDisplay = "";
         try {
-            const raw = localStorage.getItem(CLOUD_CONFIG_STORAGE_KEY);
-            if (raw) lsCfg = JSON.parse(raw);
+            storedUserDisplay = localStorage.getItem(ACTIVE_USER_STORAGE_KEY) || "";
         } catch (_) {}
 
-        const sharedToken = this.decodeRepoToken(SHARED_GIST_CONFIG.encodedToken);
-        const customToken = (dbCfg?.githubToken || lsCfg?.githubToken || "").trim();
-        const isSharedEmbedded = Boolean(sharedToken);
-        const githubToken = sharedToken || customToken;
-        const gistId = (SHARED_GIST_CONFIG.gistId || dbCfg?.gistId || lsCfg?.gistId || "").trim();
-        const username = this.normalizeUsername(profile?.username || dbCfg?.username || lsCfg?.username || "");
+        const githubToken = this.decodeRepoToken(appCfg.encodedToken);
+        const gistId = appCfg.gistId || this.normalizeGistId(dbCfg?.gistId || "");
+        const candidateUser = storedUserDisplay || profile?.displayName || profile?.username || dbCfg?.username || "";
+        const displayName = this.findAllowedDisplayName(candidateUser);
+        const username = this.normalizeUsername(displayName);
 
         return {
             key: "cloudConfig",
             githubToken,
-            rawCustomToken: customToken,
             gistId,
             username,
-            autoSync: dbCfg?.autoSync ?? lsCfg?.autoSync ?? true,
-            lastSyncAt: dbCfg?.lastSyncAt || lsCfg?.lastSyncAt || null,
-            isSharedEmbedded
+            displayName,
+            autoSync: true,
+            lastSyncAt: dbCfg?.lastSyncAt || null,
+            isSharedEmbedded: Boolean(githubToken)
         };
     }
 
     async saveCloudConfig(partialCfg) {
         const current = await this.getCloudConfig();
-        const nextCustomToken = partialCfg.githubToken !== undefined
-            ? (partialCfg.githubToken || "").trim()
-            : current.rawCustomToken;
         const nextGistId = partialCfg.gistId !== undefined
-            ? (partialCfg.gistId || "").trim()
+            ? this.normalizeGistId(partialCfg.gistId)
             : (current.gistId || "");
-        const nextUsername = partialCfg.username !== undefined
-            ? this.normalizeUsername(partialCfg.username)
-            : (current.username || "");
+
+        let nextDisplayName = current.displayName || "";
+        let nextUsername = current.username || "";
+        if (partialCfg.username !== undefined) {
+            const matched = this.findAllowedDisplayName(partialCfg.username);
+            nextDisplayName = matched;
+            nextUsername = this.normalizeUsername(matched);
+        }
 
         const storedObj = {
             key: "cloudConfig",
-            githubToken: nextCustomToken,
             gistId: nextGistId,
             username: nextUsername,
-            autoSync: partialCfg.autoSync !== undefined ? partialCfg.autoSync : current.autoSync,
+            displayName: nextDisplayName,
+            autoSync: true,
             lastSyncAt: partialCfg.lastSyncAt !== undefined ? partialCfg.lastSyncAt : current.lastSyncAt
         };
 
         await this.put("settings", storedObj);
-        try {
-            localStorage.setItem(CLOUD_CONFIG_STORAGE_KEY, JSON.stringify(storedObj));
-        } catch (_) {}
 
         if (partialCfg.username !== undefined) {
+            try {
+                if (nextDisplayName) {
+                    localStorage.setItem(ACTIVE_USER_STORAGE_KEY, nextDisplayName);
+                } else {
+                    localStorage.removeItem(ACTIVE_USER_STORAGE_KEY);
+                }
+            } catch (_) {}
+
             const profile = await this.get("settings", "profile");
             if (profile) {
                 profile.username = nextUsername;
+                profile.displayName = nextDisplayName;
                 await this.put("settings", profile);
             }
         }
@@ -844,12 +942,13 @@ class DatabaseManager {
     }
 
     async buildCompactProgressPayload() {
-        const [vocab, days, mistakes, activity, profile] = await Promise.all([
+        const [vocab, days, mistakes, activity, profile, aiConfig] = await Promise.all([
             this.getAll("vocabulary"),
             this.getAll("days"),
             this.getAll("mistakes"),
             this.getAll("activity"),
-            this.get("settings", "profile")
+            this.get("settings", "profile"),
+            this.get("settings", "aiConfig")
         ]);
 
         const defaultMap = new Map();
@@ -907,10 +1006,16 @@ class DatabaseManager {
 
         return {
             app: "LinguaQuest_AI_User_Sync",
-            version: 2,
+            version: 3,
             username: this.normalizeUsername(profile?.username || ""),
+            displayName: profile?.displayName || "",
             savedAt: new Date().toISOString(),
             profile: profile || null,
+            aiConfig: aiConfig ? {
+                encodedApiKey: aiConfig.apiKey ? this.encodeTokenForRepo(aiConfig.apiKey) : "",
+                model: aiConfig.model || "gemini-2.5-flash",
+                preferredScenario: aiConfig.preferredScenario || "Günlük Hayat"
+            } : null,
             days: days || [],
             mistakes: mistakes || [],
             activity: activity || [],
@@ -1142,6 +1247,25 @@ class DatabaseManager {
                 }
             }
 
+            if (payload.aiConfig && typeof payload.aiConfig === "object") {
+                const existingAi = (await this.get("settings", "aiConfig")) || {
+                    key: "aiConfig",
+                    apiKey: "",
+                    model: "gemini-2.5-flash",
+                    preferredScenario: "Günlük Hayat"
+                };
+                const decodedKey = payload.aiConfig.encodedApiKey
+                    ? this.decodeRepoToken(payload.aiConfig.encodedApiKey)
+                    : (payload.aiConfig.apiKey || "");
+                await this.put("settings", {
+                    ...existingAi,
+                    key: "aiConfig",
+                    apiKey: decodedKey || (merge ? (existingAi.apiKey || "") : ""),
+                    model: payload.aiConfig.model || existingAi.model || "gemini-2.5-flash",
+                    preferredScenario: payload.aiConfig.preferredScenario || existingAi.preferredScenario || "Günlük Hayat"
+                });
+            }
+
             return { applied: true, restoredWords: touchedVocab.size, restoredDays: mergedDays.length };
         } finally {
             this._isRestoringOrSyncing = false;
@@ -1149,47 +1273,77 @@ class DatabaseManager {
     }
 
     async githubRequest(url, options = {}, token = "") {
+        const cleanTok = this.cleanTokenInput(token);
+        if (!cleanTok) {
+            throw new Error("GitHub Token boş veya geçersiz.");
+        }
         const headers = {
             "Accept": "application/vnd.github+json",
-            "Authorization": `Bearer ${token}`,
+            "Authorization": `Bearer ${cleanTok}`,
             ...(options.headers || {})
         };
         if (options.body && !headers["Content-Type"]) {
             headers["Content-Type"] = "application/json";
         }
-        const res = await fetch(url, { ...options, headers, cache: "no-store" });
+        let res;
+        try {
+            res = await fetch(url, { ...options, headers, cache: "no-store" });
+        } catch (netErr) {
+            throw new Error("GitHub sunucusuna ulaşılamadı (internet bağlantınızı veya tarayıcı engelleyicisini kontrol edin).");
+        }
         if (!res.ok) {
-            let msg = `GitHub API Hatası (${res.status})`;
+            let apiMsg = "";
             try {
                 const errJson = await res.json();
-                if (errJson?.message) msg += `: ${errJson.message}`;
+                if (errJson?.message) apiMsg = errJson.message;
             } catch (_) {}
-            throw new Error(msg);
+            if (res.status === 401) {
+                throw new Error(`GitHub Token geçersiz veya süresi dolmuş (401${apiMsg ? `: ${apiMsg}` : ""}). Yeni bir 'gist' yetkili Classic Token oluşturun.`);
+            }
+            if (res.status === 403 || (res.status === 404 && url.endsWith("/gists"))) {
+                throw new Error(`Bu GitHub Token'da 'gist' yazma yetkisi yok (${res.status}${apiMsg ? `: ${apiMsg}` : ""}). Token oluştururken 'gist' iznini işaretleyin.`);
+            }
+            throw new Error(`GitHub API Hatası (${res.status})${apiMsg ? `: ${apiMsg}` : ""}`);
         }
         return res.json();
     }
 
     async findOrCreateGistId(token, existingGistId = "", fallbackFilename = "") {
-        if (existingGistId) {
+        const cleanTok = this.cleanTokenInput(token);
+        const normGistId = this.normalizeGistId(existingGistId);
+
+        if (normGistId) {
             try {
-                const gist = await this.githubRequest(`https://api.github.com/gists/${existingGistId}`, { method: "GET" }, token);
+                const gist = await this.githubRequest(`https://api.github.com/gists/${normGistId}`, { method: "GET" }, cleanTok);
                 if (gist?.id) return gist;
             } catch (_) {}
         }
 
-        const gists = await this.githubRequest("https://api.github.com/gists?per_page=50", { method: "GET" }, token);
+        const gists = await this.githubRequest("https://api.github.com/gists?per_page=50", { method: "GET" }, cleanTok);
         const found = (gists || []).find(g => {
             if (!g.files) return false;
-            return Object.keys(g.files).some(fn => fn.startsWith(GIST_FILE_PREFIX) || fn === "linguaquest_cloud_sync.json");
+            return Object.keys(g.files).some(fn =>
+                fn.startsWith(GIST_FILE_PREFIX) ||
+                fn === GIST_META_FILENAME ||
+                fn === "linguaquest_cloud_sync.json"
+            );
         });
         if (found) {
-            const fullGist = await this.githubRequest(`https://api.github.com/gists/${found.id}`, { method: "GET" }, token);
+            const fullGist = await this.githubRequest(`https://api.github.com/gists/${found.id}`, { method: "GET" }, cleanTok);
             await this.saveCloudConfig({ gistId: fullGist.id });
             return fullGist;
         }
 
-        const initialFilename = fallbackFilename || "linguaquest_user_default.json";
-        const initialPayload = await this.buildCompactProgressPayload();
+        const useMetaFile = !fallbackFilename;
+        const initialFilename = fallbackFilename || GIST_META_FILENAME;
+        const initialContent = useMetaFile
+            ? JSON.stringify({
+                app: "LinguaQuest_AI_MultiUser",
+                version: 2,
+                createdAt: new Date().toISOString()
+            })
+            : JSON.stringify(await this.buildCompactProgressPayload());
+
         const created = await this.githubRequest("https://api.github.com/gists", {
             method: "POST",
             body: JSON.stringify({
@@ -1197,11 +1351,11 @@ class DatabaseManager {
                 public: false,
                 files: {
                     [initialFilename]: {
-                        content: JSON.stringify(initialPayload)
+                        content: initialContent
                     }
                 }
             })
-        }, token);
+        }, cleanTok);
         await this.saveCloudConfig({ gistId: created.id });
         return created;
     }
@@ -1212,7 +1366,7 @@ class DatabaseManager {
         let text = file.content || "";
         if (file.truncated && file.raw_url) {
             const rawRes = await fetch(file.raw_url, {
-                headers: { "Authorization": `Bearer ${token}` },
+                headers: { "Authorization": `Bearer ${this.cleanTokenInput(token)}` },
                 cache: "no-store"
             });
             if (rawRes.ok) text = await rawRes.text();
@@ -1229,6 +1383,7 @@ class DatabaseManager {
         return files
             .filter(fn => fn.startsWith(GIST_FILE_PREFIX) && fn.endsWith(GIST_FILE_SUFFIX))
             .map(fn => fn.slice(GIST_FILE_PREFIX.length, -GIST_FILE_SUFFIX.length))
+            .filter(u => u && u !== "default")
             .sort();
     }
 
@@ -1319,33 +1474,50 @@ class DatabaseManager {
         }
     }
 
-    async switchUserProfile(newUsername) {
-        const norm = this.normalizeUsername(newUsername);
-        if (!norm) {
-            throw new Error("Lütfen geçerli bir kullanıcı adı girin (harf/rakam).");
+    async switchUserProfile(selectedUser) {
+        const displayName = this.findAllowedDisplayName(selectedUser);
+        const norm = this.normalizeUsername(displayName);
+        if (!displayName || !norm) {
+            throw new Error("Geçersiz kullanıcı! Lütfen listeden kayıtlı bir kullanıcı seçin.");
         }
 
         const prevCfg = await this.getCloudConfig();
-        if (prevCfg.githubToken && prevCfg.username && prevCfg.username !== norm) {
+        if (!prevCfg.githubToken) {
+            throw new Error("Bulut bağlantısı yapılandırılmamış (cloudConfig.js içinde şifreli GitHub Token bulunamadı).");
+        }
+
+        const isSameUser = Boolean(prevCfg.username && prevCfg.username === norm);
+        let loadedFromCloud = false;
+        let gistId = prevCfg.gistId || "";
+
+        // 1. Önceki kullanıcı farklıysa mevcut ilerlemesini GitHub Gist'e kaydet
+        if (prevCfg.username && !isSameUser) {
             await this.syncToGitHubGist({ silent: true });
         }
 
+        // 2. Yerel önbelleği ve önceki kişinin Gemini API anahtarını sıfırla (tamamen bulut tabanlı)
         await this.resetProgressKeepWords({ syncResetToCloud: false });
-        await this.saveCloudConfig({ username: norm });
+        const existingAi = await this.get("settings", "aiConfig");
+        await this.put("settings", {
+            ...(existingAi || {}),
+            key: "aiConfig",
+            apiKey: "",
+            model: "gemini-2.5-flash",
+            preferredScenario: "Günlük Hayat"
+        });
 
-        let loadedFromCloud = false;
-        let gistId = prevCfg.gistId || "";
-        if (prevCfg.githubToken) {
-            const pullRes = await this.pullFromGitHubGist({ silent: false, merge: false });
-            gistId = pullRes?.gistId || gistId;
-            if (pullRes?.applied) {
-                loadedFromCloud = true;
-            } else {
-                await this.syncToGitHubGist({ silent: true, forceOverwrite: true });
-            }
+        await this.saveCloudConfig({ username: displayName });
+
+        // 3. Seçilen kullanıcının tüm ilerlemesini ve Gemini API Key'ini GitHub Gist'ten çek
+        const pullRes = await this.pullFromGitHubGist({ silent: false, merge: false });
+        gistId = pullRes?.gistId || gistId;
+        if (pullRes?.applied) {
+            loadedFromCloud = true;
+        } else {
+            await this.syncToGitHubGist({ silent: true, forceOverwrite: true });
         }
 
-        return { username: norm, loadedFromCloud, gistId };
+        return { username: norm, displayName, loadedFromCloud, gistId };
     }
 
     scheduleCloudSync() {
@@ -1354,11 +1526,11 @@ class DatabaseManager {
         this._cloudSyncTimer = setTimeout(async () => {
             try {
                 const cfg = await this.getCloudConfig();
-                if (cfg.githubToken && cfg.username && cfg.autoSync !== false) {
+                if (cfg.githubToken && cfg.username) {
                     await this.syncToGitHubGist({ silent: true });
                 }
             } catch (_) {}
-        }, 4000);
+        }, 2500);
     }
 }
 
