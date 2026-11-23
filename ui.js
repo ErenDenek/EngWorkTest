@@ -46,7 +46,7 @@ class UIController {
         return this._preferredEnVoice;
     }
 
-    speakEnglish(text, { force = false, delayMs = 150 } = {}) {
+    speakEnglish(text, { force = false, delayMs = 150, rate = 0.88 } = {}) {
         const clean = (text || "").toString().trim();
         if (!clean) return;
         if (this.ttsMuted && !force) return;
@@ -71,12 +71,24 @@ class UIController {
                     } else {
                         utter.lang = "en-US";
                     }
-                    utter.rate = 0.88;
+                    utter.rate = rate;
                     utter.pitch = 1.0;
                     window.speechSynthesis.speak(utter);
                 } catch (_) { }
             }, wait);
         } catch (_) { }
+    }
+
+    stopActiveRecognition() {
+        if (this._activeRecognition) {
+            try {
+                this._activeRecognition.onresult = null;
+                this._activeRecognition.onerror = null;
+                this._activeRecognition.onend = null;
+                this._activeRecognition.abort();
+            } catch (_) { }
+            this._activeRecognition = null;
+        }
     }
 
     updateTtsToggleUI() {
@@ -89,6 +101,7 @@ class UIController {
     }
 
     clearActiveQuizListeners() {
+        this.stopActiveRecognition();
         if (this._activeQuizKeyHandler) {
             document.removeEventListener("keydown", this._activeQuizKeyHandler);
             this._activeQuizKeyHandler = null;
@@ -188,6 +201,7 @@ class UIController {
                 if (targetId === "map-view") await this.renderMapAndQuest();
                 if (targetId === "sentence-practice-view") await this.renderSentencePracticeSetup();
                 if (targetId === "vocab-test-view") await this.renderVocabTestSetup();
+                if (targetId === "pronunciation-view") await this.renderPronunciationSetup();
             });
         });
 
@@ -3888,6 +3902,425 @@ class UIController {
         };
 
         renderQ();
+    }
+
+    // =========================================================================
+    // 6.C TELAFFUZ PRATİĞİ (MİKROFON İLE KONUŞMA & DOĞRULUK KONTROLÜ)
+    // =========================================================================
+    computePronunciationSimilarity(spokenRaw, targetRaw) {
+        const norm = (s) => (s || "")
+            .toLowerCase()
+            .replace(/[^a-z0-9'\s]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        const a = norm(spokenRaw);
+        const b = norm(targetRaw);
+        if (!a || !b) return 0;
+        if (a === b) return 100;
+        // Eğer kullanıcı kelimenin içinde geçtiği kısa bir şey söylediyse tam eşleşme ver
+        const aWords = a.split(" ");
+        const bWords = b.split(" ");
+        if (bWords.length === 1 && aWords.includes(b)) return 100;
+        if (a.includes(b)) return 96;
+
+        // Levenshtein mesafesi ile benzerlik yüzdesi
+        const m = a.length;
+        const n = b.length;
+        const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+        for (let i = 0; i <= m; i++) dp[i][0] = i;
+        for (let j = 0; j <= n; j++) dp[0][j] = j;
+        for (let i = 1; i <= m; i++) {
+            for (let j = 1; j <= n; j++) {
+                const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+                dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
+            }
+        }
+        const maxLen = Math.max(m, n);
+        return Math.max(0, Math.round((1 - dp[m][n] / maxLen) * 100));
+    }
+
+    async renderPronunciationSetup() {
+        this.clearActiveQuizListeners();
+        this.setMobileFocusMode(false);
+        const container = document.getElementById("pronunciation-container");
+        if (!container) return;
+
+        const allVocab = await window.dbManager.getAll("vocabulary");
+        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const hasMicSupport = Boolean(SpeechRec);
+
+        const pronConfig = {
+            poolMode: "learning", // 'learning' | 'all' | 'mistakes' | 'mastered'
+            cefrModes: ["ALL"],
+            wordCount: 15
+        };
+
+        const learningCount = allVocab.filter(v => v.status === "learning" || v.status === "review").length;
+        const activeAllCount = allVocab.filter(v => v.status !== "mastered").length;
+        const mistakeCount = allVocab.filter(v => (v.mistakeCount || 0) > 0 && v.status !== "mastered").length;
+        const masteredCount = allVocab.filter(v => v.status === "mastered").length;
+
+        const drawSetup = () => {
+            container.innerHTML = `
+                <div class="glass-panel practice-setup-card">
+                    <span class="quest-day-tag">KONUŞMA & TELAFFUZ ATÖLYESİ</span>
+                    <h2>🎙️ İngilizce Telaffuz Pratiği</h2>
+                    <p class="text-muted">Ekranda verilen İngilizce kelimeyi mikrofonla sesli söyleyin; sistem telaffuzunuzu anlık analiz edip doğru olup olmadığını kontrol etsin.</p>
+
+                    <div class="feedback-banner" style="background:${hasMicSupport ? "rgba(16,185,129,0.14)" : "rgba(239,68,68,0.16)"};color:${hasMicSupport ? "#34d399" : "#f87171"};">
+                        ${hasMicSupport
+                    ? "✅ Tarayıcınız İngilizce ses tanımayı (Speech Recognition) destekliyor. Mikrofon izni verip hemen başlayabilirsiniz."
+                    : "⚠️ Bu tarayıcı Web Speech Recognition desteklemiyor. Chrome, Edge veya iPhone Safari üzerinden açarak kullanabilirsiniz."}
+                    </div>
+
+                    <div class="setup-section-block">
+                        <h4>1. Hangi Kelimelerin Telaffuzunu Çalışmak İstersiniz?</h4>
+                        <div class="setup-choice-grid" data-pgroup="poolMode">
+                            <button type="button" class="setup-choice-tile ${pronConfig.poolMode === "learning" ? "active" : ""}" data-val="learning">
+                                <strong><span>🌱 Öğreniliyor / Tekrar</span> <span class="tag-badge">${learningCount}</span></strong>
+                                <small>Şu an çalıştığınız kelimelerin telaffuzunu pekiştirin</small>
+                            </button>
+                            <button type="button" class="setup-choice-tile ${pronConfig.poolMode === "all" ? "active" : ""}" data-val="all">
+                                <strong><span>🎲 Tüm Aktif Havuz</span> <span class="tag-badge">${activeAllCount}</span></strong>
+                                <small>Havuzdaki tüm kelimelerden rastgele telaffuz pratiği</small>
+                            </button>
+                            <button type="button" class="setup-choice-tile ${pronConfig.poolMode === "mistakes" ? "active" : ""}" data-val="mistakes">
+                                <strong><span>⚠️ Hata Yapılanlar</span> <span class="tag-badge tag-status-review">${mistakeCount}</span></strong>
+                                <small>Zorlandığınız kelimeleri yüksek sesle tekrar edin</small>
+                            </button>
+                            <button type="button" class="setup-choice-tile ${pronConfig.poolMode === "mastered" ? "active" : ""}" data-val="mastered">
+                                <strong><span>👑 Ustalaşılanlar</span> <span class="tag-badge tag-status-mastered">${masteredCount}</span></strong>
+                                <small>Bildiğiniz kelimelerin aksan ve telaffuzunu tazeleyin</small>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="setup-section-block">
+                        <h4>2. Seviye Filtresi (CEFR)</h4>
+                        <div class="scenario-pills" data-pgroup="cefrModes">
+                            ${["ALL", "A1", "A2", "B1", "B2", "C1"].map(lvl => {
+                        const isActive = pronConfig.cefrModes.includes(lvl);
+                        return `<button type="button" class="scenario-pill ${isActive ? "active" : ""}" data-val="${lvl}">${lvl === "ALL" ? "🔀 Tüm Seviyeler" : (isActive ? `✓ ${lvl}` : lvl)}</button>`;
+                    }).join("")}
+                        </div>
+                    </div>
+
+                    <div class="setup-section-block">
+                        <h4>3. Kelime Sayısı</h4>
+                        <div class="scenario-pills" data-pgroup="wordCount">
+                            <button type="button" class="scenario-pill ${pronConfig.wordCount === 10 ? "active" : ""}" data-val="10">10 Kelime</button>
+                            <button type="button" class="scenario-pill ${pronConfig.wordCount === 15 ? "active" : ""}" data-val="15">15 Kelime</button>
+                            <button type="button" class="scenario-pill ${pronConfig.wordCount === 25 ? "active" : ""}" data-val="25">25 Kelime</button>
+                        </div>
+                    </div>
+
+                    <div class="form-actions" style="justify-content:flex-end;margin-top:1.75rem;">
+                        <button type="button" class="btn btn-primary" id="btn-start-pronunciation-session" ${!hasMicSupport ? "disabled" : ""}>
+                            🎙️ Telaffuz Pratiğini Başlat ➔
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            container.querySelectorAll("[data-pgroup] [data-val]").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    const grp = btn.closest("[data-pgroup]").getAttribute("data-pgroup");
+                    let val = btn.getAttribute("data-val");
+                    if (grp === "cefrModes") {
+                        if (val === "ALL") {
+                            pronConfig.cefrModes = ["ALL"];
+                        } else {
+                            let next = pronConfig.cefrModes.filter(x => x !== "ALL");
+                            next = next.includes(val) ? next.filter(x => x !== val) : [...next, val];
+                            pronConfig.cefrModes = next.length > 0 ? next : ["ALL"];
+                        }
+                    } else {
+                        if (grp === "wordCount") val = parseInt(val, 10);
+                        pronConfig[grp] = val;
+                    }
+                    drawSetup();
+                });
+            });
+
+            document.getElementById("btn-start-pronunciation-session")?.addEventListener("click", () => {
+                this.startPronunciationSession(pronConfig);
+            });
+        };
+
+        drawSetup();
+    }
+
+    async startPronunciationSession(pronConfig) {
+        const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRec) {
+            this.showToast("⚠️ Tarayıcınız mikrofonla ses tanımayı desteklemiyor.");
+            return;
+        }
+
+        const container = document.getElementById("pronunciation-container");
+        const allVocab = await window.dbManager.getAll("vocabulary");
+        const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
+
+        let pool = [...allVocab];
+        if (pronConfig.poolMode === "learning") {
+            pool = pool.filter(v => v.status === "learning" || v.status === "review");
+        } else if (pronConfig.poolMode === "mistakes") {
+            pool = pool.filter(v => (v.mistakeCount || 0) > 0 && v.status !== "mastered");
+        } else if (pronConfig.poolMode === "mastered") {
+            pool = pool.filter(v => v.status === "mastered");
+        } else {
+            pool = pool.filter(v => v.status !== "mastered");
+        }
+
+        if (!pronConfig.cefrModes.includes("ALL")) {
+            pool = pool.filter(v => pronConfig.cefrModes.includes(v.cefr));
+        }
+
+        if (pool.length === 0) {
+            this.showToast("⚠️ Seçtiğiniz filtrede kelime bulunamadı. Lütfen başka bir havuz seçin.");
+            return;
+        }
+
+        const items = shuffle(pool).slice(0, pronConfig.wordCount);
+        this.clearActiveQuizListeners();
+        this.setMobileFocusMode(true);
+
+        let idx = 0;
+        let passedCount = 0;
+        let isListening = false;
+        let sessionEnded = false;
+        let advancing = false;
+        let ignoreUntil = 0;
+        let lastProcessedResultIndex = -1;
+
+        container.innerHTML = `
+            <div class="glass-panel practice-setup-card focus-quiz-card">
+                <div class="focus-quiz-topbar">
+                    <button class="btn btn-secondary btn-sm focus-back-btn" id="btn-pron-exit">← Çık</button>
+                    <div class="focus-quiz-progress-wrap">
+                        <div class="quiz-progress-track">
+                            <div class="quiz-progress-fill" id="pron-progress-fill" style="width:0%"></div>
+                        </div>
+                        <span class="focus-quiz-counter" id="pron-counter">1 / ${items.length}</span>
+                    </div>
+                    <span class="tag-badge tag-cefr" id="pron-cefr-badge">B1</span>
+                    <button type="button" class="btn btn-secondary btn-sm" id="btn-pron-skip">Geç ⏭️</button>
+                </div>
+
+                <div class="quiz-container-box pron-stage-box">
+                    <small class="text-muted">Mikrofonu bir kez açın ve ekrandaki İngilizce kelimeyi <strong>sesli söyleyin</strong>:</small>
+                    <div class="pron-target-word" id="pron-target-word"></div>
+                    <p class="text-muted" id="pron-target-meaning" style="font-size:0.95rem;"></p>
+
+                    <div class="pron-listen-row">
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-pron-listen-normal">🔊 Normal Dinle</button>
+                        <button type="button" class="btn btn-secondary btn-sm" id="btn-pron-listen-slow">🐢 Yavaş Dinle (0.62x)</button>
+                    </div>
+
+                    <button type="button" class="mic-practice-btn" id="btn-pron-mic" title="Mikrofonu Başlat / Durdur (Space)">🎙️</button>
+                    <div id="pron-mic-status" class="text-muted" style="font-size:0.84rem;margin-top:0.35rem;">Mikrofonu bir kez açın (veya Space) — tüm kelimeler boyunca açık kalır</div>
+
+                    <div class="pron-heard-box" id="pron-heard-box">
+                        <span class="text-muted">Mikrofon kapalı...</span>
+                    </div>
+                    <div id="pron-feedback-area" style="margin-top:0.85rem;"></div>
+                </div>
+            </div>
+        `;
+
+        const progressFill = document.getElementById("pron-progress-fill");
+        const counterEl = document.getElementById("pron-counter");
+        const cefrBadge = document.getElementById("pron-cefr-badge");
+        const wordEl = document.getElementById("pron-target-word");
+        const meaningEl = document.getElementById("pron-target-meaning");
+        const micBtn = document.getElementById("btn-pron-mic");
+        const statusEl = document.getElementById("pron-mic-status");
+        const heardBox = document.getElementById("pron-heard-box");
+        const fbArea = document.getElementById("pron-feedback-area");
+
+        const updateWordUI = () => {
+            const item = items[idx];
+            const progressPct = Math.round(((idx + 1) / items.length) * 100);
+            const meaningTr = item.meanings?.[0]?.tr || "";
+            progressFill.style.width = `${progressPct}%`;
+            counterEl.textContent = `${idx + 1} / ${items.length}`;
+            cefrBadge.textContent = item.cefr || "B1";
+            wordEl.textContent = item.term;
+            meaningEl.innerHTML = `${meaningTr} <span style="opacity:0.7;">(${item.partOfSpeech || "word"})</span>`;
+            fbArea.innerHTML = "";
+            heardBox.innerHTML = isListening
+                ? `<span style="color:var(--accent-info);">🎤 Dinleniyor — "${item.term}" kelimesini söyleyin...</span>`
+                : `<span class="text-muted">Mikrofona dokunun ve kelimeyi söyleyin...</span>`;
+        };
+
+        const advance = async () => {
+            if (advancing || sessionEnded) return;
+            advancing = true;
+            if (this._quizAutoAdvanceTimer) {
+                clearTimeout(this._quizAutoAdvanceTimer);
+                this._quizAutoAdvanceTimer = null;
+            }
+            if (idx < items.length - 1) {
+                idx++;
+                ignoreUntil = Date.now() + 450;
+                advancing = false;
+                updateWordUI();
+            } else {
+                sessionEnded = true;
+                this.clearActiveQuizListeners();
+                await window.dbManager.logDailyActivity(30, 0, null);
+                await this.updateHUD();
+                this.launchConfetti();
+                this.showToast(`🎉 Telaffuz pratiği bitti! (${passedCount}/${items.length} doğru telaffuz • +30 XP)`);
+                this.renderPronunciationSetup();
+            }
+        };
+
+        const startContinuousMic = () => {
+            if (sessionEnded) return;
+            if (isListening) {
+                this.stopActiveRecognition();
+                isListening = false;
+                micBtn.classList.remove("listening");
+                statusEl.textContent = "Mikrofon durduruldu. Devam etmek için dokunun.";
+                heardBox.innerHTML = `<span class="text-muted">Mikrofon kapalı...</span>`;
+                return;
+            }
+
+            if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+            this.stopActiveRecognition();
+
+            const rec = new SpeechRec();
+            rec.lang = "en-US";
+            rec.interimResults = true;
+            rec.maxAlternatives = 5;
+            rec.continuous = true;
+            this._activeRecognition = rec;
+            lastProcessedResultIndex = -1;
+
+            isListening = true;
+            micBtn.classList.add("listening");
+            statusEl.textContent = "🔴 Mikrofon açık — kelimeleri sırayla söyleyebilirsiniz (Durdurmak için tekrar dokunun)";
+            heardBox.innerHTML = `<span style="color:var(--accent-info);">🎤 Sizi dinliyorum...</span>`;
+            fbArea.innerHTML = "";
+
+            rec.onresult = (event) => {
+                if (sessionEnded || advancing || Date.now() < ignoreUntil) return;
+                const item = items[idx];
+                if (!item) return;
+
+                const rIdx = event.results.length - 1;
+                if (rIdx <= lastProcessedResultIndex) return;
+                const last = event.results[rIdx];
+
+                const alternatives = [];
+                for (let i = 0; i < last.length; i++) {
+                    alternatives.push(last[i].transcript.trim());
+                }
+                const primaryTranscript = alternatives[0] || "";
+                if (!primaryTranscript) return;
+
+                heardBox.innerHTML = `🗣️ Duyulan: <strong>"${primaryTranscript}"</strong>`;
+
+                let bestScore = 0;
+                let bestText = primaryTranscript;
+                for (const alt of alternatives) {
+                    const sc = this.computePronunciationSimilarity(alt, item.term);
+                    if (sc > bestScore) {
+                        bestScore = sc;
+                        bestText = alt;
+                    }
+                }
+
+                // Tam eşleşme (100%) anlık gelirse bile beklemeden onayla; değilse isFinal bekle
+                if (bestScore >= 96 || (last.isFinal && bestScore >= 85)) {
+                    lastProcessedResultIndex = rIdx;
+                    passedCount++;
+                    ignoreUntil = Date.now() + 950;
+                    fbArea.innerHTML = `
+                        <div class="feedback-banner" style="background:rgba(16,185,129,0.2);color:#34d399;">
+                            ✅ <strong>Harika Telaffuz! (%${bestScore})</strong> — "${bestText}" doğru algılandı! Sonraki kelimeye geçiliyor...
+                        </div>`;
+                    this._quizAutoAdvanceTimer = setTimeout(() => advance(), 850);
+                } else if (last.isFinal) {
+                    lastProcessedResultIndex = rIdx;
+                    if (bestScore >= 65) {
+                        fbArea.innerHTML = `
+                            <div class="feedback-banner" style="background:rgba(245,158,11,0.2);color:#fbbf24;">
+                                🟡 <strong>Çok Yaklaştın! (%${bestScore})</strong> — Duyulan: <code>${bestText}</code> • Hedef: <code>${item.term}</code><br>
+                                <small>Tekrar söyleyebilir veya istersen "Geç" butonuna basabilirsin.</small>
+                            </div>`;
+                    } else {
+                        fbArea.innerHTML = `
+                            <div class="feedback-banner" style="background:rgba(239,68,68,0.2);color:#f87171;">
+                                ❌ <strong>Eşleşmedi (%${bestScore})</strong> — Duyulan: <code>${bestText}</code> • Hedef: <code>${item.term}</code><br>
+                                <small>Tekrar söyleyin veya isterseniz 🐢 Yavaş Dinle ile telaffuzunu kontrol edin.</small>
+                            </div>`;
+                    }
+                }
+            };
+
+            rec.onerror = (ev) => {
+                if (ev.error === "no-speech" || ev.error === "aborted") return;
+                isListening = false;
+                micBtn.classList.remove("listening");
+                const errMsg = ev.error === "not-allowed"
+                    ? "❌ Mikrofon izni reddedildi. Tarayıcı adres çubuğundaki kilit/mikrofon simgesinden izin verin."
+                    : `❌ Mikrofon hatası: ${ev.error}`;
+                statusEl.textContent = "Mikrofon durdu. Tekrar açmak için dokunun.";
+                fbArea.innerHTML = `<div class="feedback-banner" style="background:rgba(239,68,68,0.18);color:#f87171;">${errMsg}</div>`;
+            };
+
+            rec.onend = () => {
+                if (sessionEnded) return;
+                // Tarayıcı uzun sessizlikte otomatik durdurursa, sadece HTTPS/localhost üzerinde sessizce açık tut
+                if (isListening && (window.location.protocol === "https:" || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")) {
+                    try {
+                        lastProcessedResultIndex = -1;
+                        rec.start();
+                        return;
+                    } catch (_) {}
+                }
+                isListening = false;
+                micBtn.classList.remove("listening");
+                statusEl.textContent = "Mikrofon beklemede. Devam etmek için dokunun.";
+            };
+
+            try {
+                rec.start();
+            } catch (e) {
+                isListening = false;
+                micBtn.classList.remove("listening");
+                this.showToast("❌ Mikrofon başlatılamadı: " + e.message);
+            }
+        };
+
+        document.getElementById("btn-pron-exit").addEventListener("click", () => {
+            sessionEnded = true;
+            this.renderPronunciationSetup();
+        });
+        document.getElementById("btn-pron-skip").addEventListener("click", () => {
+            advance();
+        });
+        document.getElementById("btn-pron-listen-normal").addEventListener("click", () => {
+            ignoreUntil = Date.now() + 1400;
+            this.speakEnglish(items[idx].term, { force: true, delayMs: 100, rate: 0.88 });
+        });
+        document.getElementById("btn-pron-listen-slow").addEventListener("click", () => {
+            ignoreUntil = Date.now() + 1600;
+            this.speakEnglish(items[idx].term, { force: true, delayMs: 100, rate: 0.62 });
+        });
+        micBtn.addEventListener("click", startContinuousMic);
+
+        this._activeQuizKeyHandler = (e) => {
+            if (e.code === "Space" && !e.repeat && !["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName)) {
+                e.preventDefault();
+                startContinuousMic();
+            }
+        };
+        document.addEventListener("keydown", this._activeQuizKeyHandler);
+
+        updateWordUI();
     }
 
     // =========================================================================
