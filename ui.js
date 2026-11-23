@@ -67,7 +67,7 @@ class UIController {
                         this.showToast(`☁️ "${cfg.displayName || cfg.username}" buluttan güncellendi!`);
                     }
                 }
-            } catch (_) {}
+            } catch (_) { }
         };
 
         const cloudCfg = await window.dbManager.getCloudConfig();
@@ -295,7 +295,7 @@ class UIController {
                     filterCefr: document.getElementById("vocab-filter-cefr")?.value || "all",
                     sortOrder: document.getElementById("vocab-sort-order")?.value || "default"
                 }
-            }).catch(() => {});
+            }).catch(() => { });
         };
 
         ["vocab-search", "vocab-filter-status", "vocab-filter-cefr", "vocab-sort-order"].forEach(id => {
@@ -387,7 +387,7 @@ class UIController {
             document.getElementById("api-onboarding-modal").style.display = "none";
             await this.updateHUD();
             await this.loadSettingsForm();
-            window.dbManager.syncToGitHubGist({ silent: true }).catch(() => {});
+            window.dbManager.syncToGitHubGist({ silent: true }).catch(() => { });
             this.showToast(`✅ Gemini API Key ve "${modelVal}" modeli buluta kaydedildi!`);
         });
 
@@ -741,14 +741,15 @@ class UIController {
         const singleTrMeaning = targetMeaningObj.tr;
         const meaningContext = targetMeaningObj.context || `${chosenMeaningIndex + 1}. Anlam`;
 
+        const canWriteEn = item.status === "learning" || item.status === "review";
         let direction;
         if (questionTypeMode === "write_only") {
-            direction = "WRITE_EN";
+            direction = canWriteEn ? "WRITE_EN" : (Math.random() < 0.5 ? "EN_TO_TR" : "TR_TO_EN");
         } else if (questionTypeMode === "mc_only") {
             direction = Math.random() < 0.5 ? "EN_TO_TR" : "TR_TO_EN";
         } else {
             const roll = Math.random();
-            direction = roll < 0.45 ? "WRITE_EN" : (roll < 0.725 ? "EN_TO_TR" : "TR_TO_EN");
+            direction = (canWriteEn && roll < 0.45) ? "WRITE_EN" : (roll < 0.725 ? "EN_TO_TR" : "TR_TO_EN");
         }
 
         if (direction === "WRITE_EN") {
@@ -920,6 +921,11 @@ class UIController {
                             ${q.testedMeaningObj.example ? `<br><small style="opacity:0.9;">Örnek: "${q.testedMeaningObj.example}"</small>` : ""}
                         </div>`;
                     await onSuccess(wrongTries === 0 && !answerWasRevealed, answerWasRevealed);
+                    if (typeof onAutoAdvance === "function") {
+                        this._quizAutoAdvanceTimer = setTimeout(() => {
+                            onAutoAdvance();
+                        }, 650);
+                    }
                 } else {
                     wrongTries++;
                     await onMistake();
@@ -946,8 +952,8 @@ class UIController {
             <div class="quiz-prompt-header">
                 <small class="text-muted quiz-instruction-text">
                     ${q.type === "EN_TO_TR"
-                    ? `<strong>"${q.testedMeaningObj.context || "verilen"}"</strong> bağlamındaki Türkçe anlamını seçin:`
-                    : `Verilen Türkçe anlamın (<strong>${q.testedMeaningObj.context || "Genel"}</strong>) İngilizce karşılığını seçin:`}
+                ? `<strong>"${q.testedMeaningObj.context || "verilen"}"</strong> bağlamındaki Türkçe anlamını seçin:`
+                : `Verilen Türkçe anlamın (<strong>${q.testedMeaningObj.context || "Genel"}</strong>) İngilizce karşılığını seçin:`}
                 </small>
                 <h2 class="quiz-prompt-word">${q.promptTitle}</h2>
                 <p class="text-muted quiz-prompt-sub">${q.promptSub}</p>
@@ -1106,8 +1112,8 @@ class UIController {
                 ${!isMC ? `
                 <div class="form-actions" style="justify-content:flex-end;">
                     ${qIndex < questions.length - 1
-                    ? `<button class="btn btn-primary" id="btn-next-quiz-q" disabled>Sonraki Soru (${qIndex + 2}/${questions.length}) ➔</button>`
-                    : `<button class="btn btn-accent" id="btn-finish-quiz-stage" disabled>✅ Testi Bitir ve Sonraki Aşamayı Aç (+30 XP)</button>`}
+                        ? `<button class="btn btn-primary" id="btn-next-quiz-q" disabled>Sonraki Soru (${qIndex + 2}/${questions.length}) ➔</button>`
+                        : `<button class="btn btn-accent" id="btn-finish-quiz-stage" disabled>✅ Testi Bitir ve Sonraki Aşamayı Aç (+30 XP)</button>`}
                 </div>` : ""}
             `;
 
@@ -1141,7 +1147,7 @@ class UIController {
                 onMistake: async () => {
                     await window.dbManager.recordQuizAttempt(q.termObj.id, q.testedMeaningIndex, false);
                 },
-                onAutoAdvance: isMC ? () => advanceStep() : null
+                onAutoAdvance: () => advanceStep()
             });
 
             const nextBtn = document.getElementById("btn-next-quiz-q");
@@ -2828,7 +2834,7 @@ class UIController {
                 });
             }
             this.showToast("🔐 Ortak paylaşım anahtarı ve Gist başarıyla oluşturuldu!");
-            this.renderCloudUserPills("cloud-users-pills").catch(() => {});
+            this.renderCloudUserPills("cloud-users-pills").catch(() => { });
         } catch (err) {
             const fallbackGistId = window.dbManager.normalizeGistId(gistInp?.value.trim() || cfg.gistId);
             const fallbackKey = window.dbManager.encodeSyncKey(rawToken, fallbackGistId);
@@ -3149,7 +3155,7 @@ class UIController {
                     let val = btn.getAttribute("data-val");
                     if (grp === "count") val = parseInt(val, 10);
                     setupState[grp] = val;
-                    window.dbManager.saveProfilePrefs({ sentencePracticeConfig: { ...setupState } }).catch(() => {});
+                    window.dbManager.saveProfilePrefs({ sentencePracticeConfig: { ...setupState } }).catch(() => { });
                     drawSetup();
                 });
             });
@@ -3529,21 +3535,21 @@ class UIController {
                         <h4>3. Seviye Filtresi (CEFR — Birden Fazla Seçebilirsiniz)</h4>
                         <div class="scenario-pills" data-tgroup="cefrModes">
                             ${["ALL", "A1", "A2", "B1", "B2", "C1"].map(lvl => {
-                                const isActive = testConfig.cefrModes.includes(lvl);
-                                return `
+                const isActive = testConfig.cefrModes.includes(lvl);
+                return `
                                 <button type="button" class="scenario-pill ${isActive ? "active" : ""}" data-val="${lvl}">
                                     ${lvl === "ALL" ? "🔀 Tüm Seviyeler" : (isActive ? `✓ ${lvl}` : lvl)}
                                 </button>
                                 `;
-                            }).join("")}
+            }).join("")}
                         </div>
                     </div>
 
                     <div class="setup-section-block">
-                        <h4>4. Soru Formatı (Türkçesini Verip İngilizcesini Yazma / Çoktan Seçmeli)</h4>
+                        <h4>4. Soru Formatı (Yazmalı sorular yalnızca Öğreniliyor / Tekrar kelimelerinden gelir)</h4>
                         <div class="scenario-pills" data-tgroup="questionTypeMode">
                             <button type="button" class="scenario-pill ${testConfig.questionTypeMode === "mixed" ? "active" : ""}" data-val="mixed">🔀 Karışık (Şıklı + Yazmalı)</button>
-                            <button type="button" class="scenario-pill ${testConfig.questionTypeMode === "write_only" ? "active" : ""}" data-val="write_only">⌨️ Sadece Yazmalı (Türkçe ➔ İngilizce Yaz)</button>
+                            <button type="button" class="scenario-pill ${testConfig.questionTypeMode === "write_only" ? "active" : ""}" data-val="write_only">⌨️ Sadece Yazmalı (Öğreniliyor / Tekrar)</button>
                             <button type="button" class="scenario-pill ${testConfig.questionTypeMode === "mc_only" ? "active" : ""}" data-val="mc_only">🔘 Sadece Çoktan Seçmeli</button>
                         </div>
                     </div>
@@ -3592,7 +3598,7 @@ class UIController {
                             ...testConfig,
                             cefrModes: [...testConfig.cefrModes]
                         }
-                    }).catch(() => {});
+                    }).catch(() => { });
                     drawTestSetup();
                 });
             });
@@ -3637,6 +3643,15 @@ class UIController {
             pool = pool.filter(v => (v.mistakeCount || 0) > 0).sort((a, b) => (b.mistakeCount || 0) - (a.mistakeCount || 0));
         } else if (testConfig.poolMode === "new") {
             pool = pool.filter(v => v.status === "new");
+        }
+
+        // Yazmalı test seçildiyse yalnızca "Öğreniliyor / Tekrar" durumundaki kelimeleri dahil et
+        if (testConfig.questionTypeMode === "write_only") {
+            pool = pool.filter(v => v.status === "learning" || v.status === "review");
+            if (pool.length === 0) {
+                this.showToast("⚠️ Yazmalı test yalnızca 'Öğreniliyor / Tekrar' durumundaki kelimelerden oluşturulur. Önce şıklı testle birkaç kelime çalışın.");
+                return;
+            }
         }
 
         if (pool.length === 0) {
@@ -3698,8 +3713,8 @@ class UIController {
                     ${!isMC ? `
                     <div class="form-actions" style="justify-content:flex-end;">
                         ${qIdx < questions.length - 1
-                    ? `<button class="btn btn-primary" id="btn-custom-quiz-next" disabled>Sonraki Soru (${qIdx + 2}/${questions.length}) ➔</button>`
-                    : `<button class="btn btn-accent" id="btn-custom-quiz-finish" disabled>🏁 Testi Bitir</button>`}
+                        ? `<button class="btn btn-primary" id="btn-custom-quiz-next" disabled>Sonraki Soru (${qIdx + 2}/${questions.length}) ➔</button>`
+                        : `<button class="btn btn-accent" id="btn-custom-quiz-finish" disabled>🏁 Testi Bitir</button>`}
                     </div>` : ""}
                 </div>
             `;
@@ -3731,7 +3746,7 @@ class UIController {
                     await window.dbManager.recordQuizAttempt(q.termObj.id, q.testedMeaningIndex, false);
                     await window.dbManager.updateWordSRS(q.termObj.id, "srs_fail");
                 },
-                onAutoAdvance: isMC ? () => advanceStep() : null
+                onAutoAdvance: () => advanceStep()
             });
 
             const nextBtn = document.getElementById("btn-custom-quiz-next");
