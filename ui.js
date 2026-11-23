@@ -11,6 +11,81 @@ class UIController {
         this._lastCloudPullAt = 0;
         this._activeQuizKeyHandler = null;
         this._quizAutoAdvanceTimer = null;
+        this.ttsMuted = false;
+        try {
+            this.ttsMuted = localStorage.getItem("LQ_TTS_MUTED") === "1";
+        } catch (_) { }
+        this._preferredEnVoice = null;
+    }
+
+    pickBestEnglishVoice() {
+        if (typeof window === "undefined" || !("speechSynthesis" in window)) return null;
+        const voices = window.speechSynthesis.getVoices() || [];
+        if (voices.length === 0) return null;
+
+        const enVoices = voices.filter(v => /^en[-_]/i.test(v.lang || ""));
+        if (enVoices.length === 0) return null;
+
+        const scoreVoice = (v) => {
+            const name = (v.name || "").toLowerCase();
+            const lang = (v.lang || "").toLowerCase();
+            let s = 0;
+            if (lang === "en-us") s += 20;
+            else if (lang === "en-gb") s += 16;
+            if (name.includes("natural") || name.includes("neural") || name.includes("online")) s += 50;
+            if (name.includes("aria") || name.includes("jenny") || name.includes("guy")) s += 35;
+            if (name.includes("google us english") || name.includes("google uk english")) s += 30;
+            if (name.includes("ava") || name.includes("samantha") || name.includes("siri") || name.includes("allison") || name.includes("daniel")) s += 28;
+            if (name.includes("enhanced") || name.includes("premium")) s += 22;
+            if (v.localService === false) s += 5;
+            return s;
+        };
+
+        const sorted = [...enVoices].sort((a, b) => scoreVoice(b) - scoreVoice(a));
+        this._preferredEnVoice = sorted[0];
+        return this._preferredEnVoice;
+    }
+
+    speakEnglish(text, { force = false, delayMs = 150 } = {}) {
+        const clean = (text || "").toString().trim();
+        if (!clean) return;
+        if (this.ttsMuted && !force) return;
+        if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+        try {
+            if (this._ttsTimer) {
+                clearTimeout(this._ttsTimer);
+                this._ttsTimer = null;
+            }
+            window.speechSynthesis.cancel();
+            const wait = Math.max(80, delayMs);
+            this._ttsTimer = setTimeout(() => {
+                this._ttsTimer = null;
+                if (this.ttsMuted && !force) return;
+                try {
+                    const utter = new SpeechSynthesisUtterance(clean);
+                    const voice = this._preferredEnVoice || this.pickBestEnglishVoice();
+                    if (voice) {
+                        utter.voice = voice;
+                        utter.lang = voice.lang || "en-US";
+                    } else {
+                        utter.lang = "en-US";
+                    }
+                    utter.rate = 0.88;
+                    utter.pitch = 1.0;
+                    window.speechSynthesis.speak(utter);
+                } catch (_) { }
+            }, wait);
+        } catch (_) { }
+    }
+
+    updateTtsToggleUI() {
+        const btn = document.getElementById("btn-tts-toggle");
+        if (!btn) return;
+        btn.textContent = this.ttsMuted ? "🔇" : "🔊";
+        btn.title = this.ttsMuted
+            ? "İngilizce Telaffuz Sessizde (Açmak için tıklayın)"
+            : "İngilizce Telaffuz Açık (Kısmak için tıklayın)";
     }
 
     clearActiveQuizListeners() {
@@ -43,6 +118,13 @@ class UIController {
         const theme = overview.profile?.theme || "dark";
         document.documentElement.setAttribute("data-theme", theme);
         document.getElementById("btn-theme-toggle").textContent = theme === "dark" ? "🌙" : "☀️";
+
+        // Doğal İngilizce Neural Ses (Web Speech API) hazırlığı
+        this.updateTtsToggleUI();
+        if ("speechSynthesis" in window) {
+            this.pickBestEnglishVoice();
+            window.speechSynthesis.onvoiceschanged = () => this.pickBestEnglishVoice();
+        }
 
         // Bulut durum dinleyicisi
         window.dbManager.onCloudStatusChange = (state, detail) => {
@@ -107,6 +189,19 @@ class UIController {
                 if (targetId === "sentence-practice-view") await this.renderSentencePracticeSetup();
                 if (targetId === "vocab-test-view") await this.renderVocabTestSetup();
             });
+        });
+
+        // İngilizce Sesli Telaffuz Aç/Kapat (Varsayılan: Hep Açık, Basınca Kısar)
+        document.getElementById("btn-tts-toggle")?.addEventListener("click", () => {
+            this.ttsMuted = !this.ttsMuted;
+            try {
+                localStorage.setItem("LQ_TTS_MUTED", this.ttsMuted ? "1" : "0");
+            } catch (_) { }
+            if (this.ttsMuted && "speechSynthesis" in window) {
+                window.speechSynthesis.cancel();
+            }
+            this.updateTtsToggleUI();
+            this.showToast(this.ttsMuted ? "🔇 İngilizce sesli telaffuz kısıldı." : "🔊 İngilizce otomatik telaffuz açıldı!");
         });
 
         // Karanlık / Aydınlık Mod
@@ -890,6 +985,7 @@ class UIController {
                 revealBtn.style.display = "none";
                 inputEl.value = "";
                 inputEl.focus();
+                this.speakEnglish(q.correctAnswer);
                 fbEl.innerHTML = `
                     <div class="feedback-banner" style="background:rgba(245,158,11,0.2);color:#fbbf24;">
                         👁️ <strong>Doğru Cevap:</strong> <code style="font-size:1rem;">${q.correctAnswer}</code> (${q.testedMeaningObj.tr})
@@ -915,6 +1011,7 @@ class UIController {
                     checkBtn.disabled = true;
                     hintBtn.disabled = true;
                     revealBtn.style.display = "none";
+                    this.speakEnglish(q.correctAnswer);
                     fbEl.innerHTML = `
                         <div class="feedback-banner" style="background:rgba(16,185,129,0.18);color:#34d399;">
                             ✅ <strong>${answerWasRevealed ? "Harika, tekrar yazarak pekiştirdin!" : "Doğru Yazdın!"}</strong> <code>${q.correctAnswer}</code> = <strong>${q.testedMeaningObj.tr}</strong>
@@ -922,9 +1019,10 @@ class UIController {
                         </div>`;
                     await onSuccess(wrongTries === 0 && !answerWasRevealed, answerWasRevealed);
                     if (typeof onAutoAdvance === "function") {
+                        const advanceWait = this.ttsMuted ? 550 : 1050;
                         this._quizAutoAdvanceTimer = setTimeout(() => {
                             onAutoAdvance();
-                        }, 650);
+                        }, advanceWait);
                     }
                 } else {
                     wrongTries++;
@@ -955,7 +1053,10 @@ class UIController {
                 ? `<strong>"${q.testedMeaningObj.context || "verilen"}"</strong> bağlamındaki Türkçe anlamını seçin:`
                 : `Verilen Türkçe anlamın (<strong>${q.testedMeaningObj.context || "Genel"}</strong>) İngilizce karşılığını seçin:`}
                 </small>
-                <h2 class="quiz-prompt-word">${q.promptTitle}</h2>
+                <h2 class="quiz-prompt-word" style="display:flex;align-items:center;justify-content:center;gap:0.5rem;flex-wrap:wrap;">
+                    <span>${q.promptTitle}</span>
+                    ${q.type === "EN_TO_TR" ? `<button type="button" class="icon-btn" id="btn-quiz-speak-prompt" title="İngilizce Telaffuzu Dinle" style="padding:0.25rem 0.55rem;font-size:0.95rem;">🔊</button>` : ""}
+                </h2>
                 <p class="text-muted quiz-prompt-sub">${q.promptSub}</p>
             </div>
 
@@ -971,6 +1072,13 @@ class UIController {
             <div id="quiz-step-feedback" style="margin-top:0.75rem;"></div>
         `;
 
+        if (q.type === "EN_TO_TR") {
+            this.speakEnglish(q.termObj.term, { delayMs: 320 });
+            document.getElementById("btn-quiz-speak-prompt")?.addEventListener("click", () => {
+                this.speakEnglish(q.termObj.term, { force: true, delayMs: 120 });
+            });
+        }
+
         const fbEl = document.getElementById("quiz-step-feedback");
         const allOptionBtns = Array.from(quizBoxEl.querySelectorAll(".quiz-option-btn"));
 
@@ -985,15 +1093,19 @@ class UIController {
                     this.clearActiveQuizListeners();
                     allOptionBtns.forEach(b => { b.disabled = true; });
                     btn.classList.add("correct");
+                    if (q.type === "TR_TO_EN") {
+                        this.speakEnglish(q.termObj.term);
+                    }
                     fbEl.innerHTML = `
                         <div class="feedback-banner" style="background:rgba(16,185,129,0.18);color:#34d399;">
                             ✅ <strong>Doğru!</strong> "${q.termObj.term}" = <strong>${q.testedMeaningObj.tr}</strong>
                         </div>`;
                     await onSuccess(wrongTries === 0);
                     if (typeof onAutoAdvance === "function") {
+                        const advanceWait = (q.type === "TR_TO_EN" && !this.ttsMuted) ? 1050 : 260;
                         this._quizAutoAdvanceTimer = setTimeout(() => {
                             onAutoAdvance();
-                        }, 220);
+                        }, advanceWait);
                     }
                 } else {
                     wrongTries++;
@@ -1848,6 +1960,7 @@ class UIController {
                         <div class="vocab-row-left">
                             <span class="vocab-row-chevron">▸</span>
                             <strong class="vocab-row-term">${item.term}</strong>
+                            <button type="button" class="icon-btn btn-speak-vocab" data-term="${(item.term || "").replace(/"/g, "&quot;")}" title="İngilizce Telaffuzu Dinle" style="padding:0.15rem 0.45rem;font-size:0.82rem;">🔊</button>
                             <span class="tag-badge tag-cefr">${item.cefr || "B1"}</span>
                             <span class="tag-badge">${typeBadges[itemTypeKey]}</span>
                         </div>
@@ -1922,6 +2035,14 @@ class UIController {
                 details.style.display = isOpen ? "none" : "block";
                 chevron.textContent = isOpen ? "▸" : "▾";
                 parent.classList.toggle("expanded", !isOpen);
+            });
+        });
+
+        container.querySelectorAll(".btn-speak-vocab").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                e.stopPropagation();
+                const term = btn.getAttribute("data-term");
+                this.speakEnglish(term, { force: true });
             });
         });
 
